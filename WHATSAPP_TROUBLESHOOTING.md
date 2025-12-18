@@ -131,3 +131,6 @@ Currently, steps 1-2 work, but step 3 is failing.
 
 Check your n8n execution logs - they will show exactly which node is failing and why. The error message in the failed node will tell you what's wrong.
 
+
+
+

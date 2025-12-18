@@ -359,7 +359,7 @@ Sent from Zuccess Restaurant AI Assistant 🤖
             />
             <input
               type="text"
-              placeholder="Customer Number"
+              placeholder="Customer Number start with +"
               value={customerNumber}
               onChange={(e) => setCustomerNumber(e.target.value)}
             />
