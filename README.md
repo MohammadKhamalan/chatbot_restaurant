@@ -1,70 +1,209 @@
-# Getting Started with Create React App
+# Zuccess Restaurant Chatbot
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+AI-powered restaurant ordering system with voice input, menu browsing, and payment processing.
 
-## Available Scripts
+## Features
 
-In the project directory, you can run:
+- 🎤 **Voice Input**: Speak to the chatbot using browser Speech Recognition
+- 💬 **Text Chat**: Type messages to interact with the chatbot
+- 📋 **Menu Browsing**: Browse pizzas, appetizers, drinks, and desserts
+- 🛒 **Order Management**: Add items to cart and manage your order
+- 💳 **Payment Processing**: Secure payment via Stripe Checkout
+- 📱 **Kitchen Notifications**: Orders are automatically sent to kitchen via WhatsApp
+- 📧 **Invoice Delivery**: Customers receive invoices via WhatsApp
 
-### `npm start`
+## Prerequisites
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+- Node.js (v18 or higher)
+- npm or yarn
+- LiveKit account (for voice features - optional)
+- Stripe account (for payments)
+- N8N webhooks configured
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## Environment Setup
 
-### `npm test`
+### Backend (.env file in `backend/` folder)
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+```env
+# Stripe Configuration
+STRIPE_SECRET_KEY=your_stripe_secret_key
+STRIPE_WEBHOOK_SECRET=your_stripe_webhook_secret
 
-### `npm run build`
+# LiveKit Configuration (optional - voice features work without it)
+LIVEKIT_URL=wss://your-livekit-server.livekit.cloud
+LIVEKIT_API_KEY=your_livekit_api_key
+LIVEKIT_API_SECRET=your_livekit_api_secret
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+# N8N Webhooks
+N8N_CHAT_WEBHOOK=https://n8n.srv1004057.hstgr.cloud/webhook/restaurant
+N8N_KITCHEN_WEBHOOK=https://n8n.srv1004057.hstgr.cloud/webhook/kitchen_order
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+# Frontend URL (for Stripe redirects)
+FRONTEND_URL=http://localhost:3000
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+# Backend API URL (for voice agent - optional)
+BACKEND_API_URL=http://localhost:4242
+```
 
-### `npm run eject`
+### Frontend (.env file in root folder - optional)
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+```env
+REACT_APP_BACKEND_API=http://localhost:4242
+```
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+## Installation
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+1. **Clone the repository** (if not already done)
+   ```bash
+   cd restaurant-chatbot
+   ```
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+2. **Install backend dependencies**
+   ```bash
+   cd backend
+   npm install
+   ```
 
-## Learn More
+3. **Install frontend dependencies**
+   ```bash
+   cd ..
+   npm install
+   ```
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+## Running the Application
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+### Option 1: Run Both Servers Manually (Recommended)
 
-### Code Splitting
+1. **Start the Backend Server** (in one terminal)
+   ```bash
+   cd backend
+   npm start
+   ```
+   - Backend runs on: `http://localhost:4242`
+   - You should see: `🚀 Backend running on port 4242`
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+2. **Start the Frontend Server** (in another terminal)
+   ```bash
+   npm start
+   ```
+   - Frontend runs on: `http://localhost:3000`
+   - Browser should open automatically
 
-### Analyzing the Bundle Size
+### Option 2: Run with PowerShell Scripts (Windows)
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+Open PowerShell in the project root and run:
 
-### Making a Progressive Web App
+```powershell
+# Backend
+cd backend; Start-Process powershell -ArgumentList "-NoExit", "-Command", "npm start"
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+# Wait a few seconds, then Frontend
+cd ..; Start-Process powershell -ArgumentList "-NoExit", "-Command", "npm start"
+```
 
-### Advanced Configuration
+### Option 3: Check if Servers are Running
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+Check if servers are already running:
+```powershell
+netstat -ano | findstr ":4242 :3000"
+```
 
-### Deployment
+If ports are in use, you may need to stop existing processes:
+```powershell
+Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+## Project Structure
 
-### `npm run build` fails to minify
+```
+restaurant-chatbot/
+├── backend/
+│   ├── server.js          # Main backend server (Express API)
+│   ├── voice-agent.js     # Voice agent (disabled - not needed)
+│   ├── package.json
+│   └── .env               # Backend environment variables
+├── src/
+│   ├── App.jsx            # Main React component
+│   ├── App.css            # Styles
+│   ├── voice/
+│   │   └── useVoiceInput.js  # Voice input handling
+│   ├── PaymentSuccess.jsx # Payment success page
+│   └── PaymentCancel.jsx  # Payment cancel page
+├── package.json           # Frontend dependencies
+└── .env                   # Frontend environment variables (optional)
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+## API Endpoints
+
+### Backend (Port 4242)
+
+- `GET /` - Health check
+- `GET /livekit-token` - Get LiveKit access token (optional)
+- `POST /create-checkout-session` - Create Stripe checkout session
+- `POST /verify-payment` - Verify payment and process order
+
+## How It Works
+
+1. **Voice Input Flow**:
+   - User clicks microphone button
+   - Browser Speech Recognition captures voice
+   - Transcription is sent to N8N chatbot webhook
+   - Response is displayed and spoken via browser TTS
+   - Menu items (if any) are rendered
+
+2. **Text Input Flow**:
+   - User types message
+   - Message is sent to N8N chatbot webhook
+   - Response is displayed and spoken
+
+3. **Order Flow**:
+   - User adds items to cart
+   - Clicks "Confirm Order"
+   - Enters customer details
+   - Redirected to Stripe Checkout
+   - After payment, order is saved and kitchen is notified
+   - Invoice is sent to customer via WhatsApp
+
+## Troubleshooting
+
+### Backend won't start
+- Check if port 4242 is already in use: `netstat -ano | findstr ":4242"`
+- Verify `.env` file exists in `backend/` folder
+- Check Stripe API keys are correct
+
+### Frontend won't start
+- Check if port 3000 is already in use: `netstat -ano | findstr ":3000"`
+- Try clearing cache: `npm start -- --reset-cache`
+
+### Voice input not working
+- Ensure browser allows microphone access
+- Use Chrome or Edge (best Speech Recognition support)
+- Voice features work without LiveKit (uses browser STT/TTS)
+
+### Payment errors
+- Verify Stripe keys in backend `.env`
+- Check Stripe webhook URL is correct
+- Ensure frontend URL matches `FRONTEND_URL` in backend `.env`
+
+### Chatbot not responding
+- Verify N8N webhook URLs are correct
+- Check N8N workflow is active
+- Look at browser console for errors
+
+## Notes
+
+- **Voice Agent**: The Node.js voice agent (`voice-agent.js`) is disabled because `livekit-client` requires browser WebRTC APIs. The system works perfectly without it using browser Speech Recognition + direct API calls.
+
+- **LiveKit**: LiveKit is optional. Voice features work using browser-native Speech Recognition and Text-to-Speech.
+
+## Development
+
+- Backend: Express.js with Stripe integration
+- Frontend: React.js with voice capabilities
+- Chatbot: N8N webhooks
+- Payments: Stripe Checkout
+- Notifications: WhatsApp via N8N
+
+## License
+
+ISC

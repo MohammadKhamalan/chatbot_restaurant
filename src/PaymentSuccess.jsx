@@ -6,7 +6,7 @@ const BACKEND_API = process.env.REACT_APP_BACKEND_API || "http://localhost:4242"
 export default function PaymentSuccess() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [status, setStatus] = useState("processing"); // processing, success, error
+  const [status, setStatus] = useState("processing");
   const [message, setMessage] = useState("Processing your payment...");
 
   useEffect(() => {
@@ -18,11 +18,10 @@ export default function PaymentSuccess() {
       return;
     }
 
-    // Call verify-payment endpoint
-    const verifyPayment = async () => {
+    const verify = async () => {
       try {
         setStatus("processing");
-        setMessage("Verifying payment and processing your order...");
+        setMessage("Verifying payment status...");
 
         const response = await fetch(`${BACKEND_API}/verify-payment`, {
           method: "POST",
@@ -30,78 +29,49 @@ export default function PaymentSuccess() {
           body: JSON.stringify({ session_id: sessionId }),
         });
 
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
 
         if (!response.ok) {
           throw new Error(data.error || "Payment verification failed");
         }
 
         setStatus("success");
-        setMessage("Order processed successfully! Your invoice will be sent to you on WhatsApp shortly.");
+        setMessage("✅ Payment verified. Your order is being processed and will be sent to WhatsApp.");
 
-        // Redirect back home after 5 seconds
-        setTimeout(() => {
-          navigate("/");
-        }, 5000);
-
+        setTimeout(() => navigate("/"), 4000);
       } catch (err) {
-        console.error("Payment verification error:", err);
+        console.error(err);
         setStatus("error");
-        setMessage(`Error: ${err.message}. Please contact support if the issue persists.`);
-        
-        // Still redirect after error, but give more time
-        setTimeout(() => {
-          navigate("/");
-        }, 8000);
+        setMessage(`Error: ${err.message}`);
+        setTimeout(() => navigate("/"), 7000);
       }
     };
 
-    verifyPayment();
+    verify();
   }, [searchParams, navigate]);
 
   return (
-    <div
-      style={{
-        padding: 40,
-        textAlign: "center",
-        minHeight: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "center",
-        alignItems: "center",
-      }}
-    >
+    <div style={{ padding: 40, textAlign: "center" }}>
       {status === "processing" && (
         <>
           <h1>⏳ Processing...</h1>
-          <p style={{ fontSize: "18px", marginTop: "20px" }}>{message}</p>
+          <p>{message}</p>
         </>
       )}
 
       {status === "success" && (
         <>
           <h1>✅ Payment Successful</h1>
-          <p style={{ fontSize: "18px", marginTop: "20px" }}>
-            Thank you! Your order has been received.
-          </p>
-          <p style={{ fontSize: "14px", color: "#666", marginTop: "10px" }}>
-            📄 {message}
-          </p>
-          <p style={{ fontSize: "14px", color: "#666", marginTop: "10px" }}>
-            Redirecting you back…
-          </p>
+          <p>{message}</p>
+          <p style={{ opacity: 0.7 }}>Redirecting…</p>
         </>
       )}
 
       {status === "error" && (
         <>
           <h1>❌ Error</h1>
-          <p style={{ fontSize: "18px", marginTop: "20px", color: "#d32f2f" }}>
-            {message}
-          </p>
-          <p style={{ fontSize: "14px", color: "#666", marginTop: "10px" }}>
-            Redirecting you back…
-          </p>
+          <p style={{ color: "crimson" }}>{message}</p>
+          <p style={{ opacity: 0.7 }}>Redirecting…</p>
         </>
       )}
     </div>

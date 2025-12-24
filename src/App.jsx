@@ -1,6 +1,6 @@
-
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
+import { startVoiceCapture, stopVoiceCapture } from "./voice/useVoiceInput";
 
 // STATIC MENU DATA
 const MENU = {
@@ -20,12 +20,9 @@ const CATEGORY_LABELS = {
 
 // Webhooks
 const N8N_CHAT_WEBHOOK = "https://n8n.srv1004057.hstgr.cloud/webhook/restaurant";
-const N8N_SAVE_ORDER = "https://n8n.srv1004057.hstgr.cloud/webhook/save-order";
-const N8N_KITCHEN_WEBHOOK = "https://n8n.srv1004057.hstgr.cloud/webhook/kitchen_order";
 
 // Backend API (Stripe)
 const BACKEND_API = process.env.REACT_APP_BACKEND_API || "http://localhost:4242";
-
 
 // Session key
 const SESSION_KEY = "zacses_session_id";
@@ -35,6 +32,12 @@ const generateRandomSessionId = () => {
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 };
+
+// Detect Arabic
+const isArabicText = (text) => /[\u0600-\u06FF]/.test(text || "");
+
+// Pick lang for STT/TTS
+const detectLang = (text) => (isArabicText(text) ? "ar-SA" : "en-US");
 
 function App() {
   const [messages, setMessages] = useState([
@@ -49,14 +52,20 @@ function App() {
   const [currentCategory, setCurrentCategory] = useState(null);
   const [order, setOrder] = useState([]);
   const [sessionId, setSessionId] = useState(null);
+  const [isListening, setIsListening] = useState(false);
 
   // Modal
   const [showModal, setShowModal] = useState(false);
   const [customerName, setCustomerName] = useState("");
   const [customerNumber, setCustomerNumber] = useState("");
-  const [modalSuccess, setModalSuccess] = useState("");
   const [modalError, setModalError] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+
+  // Keep latest messages for fetch payload (avoid stale state)
+  const messagesRef = useRef(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     let sid = localStorage.getItem(SESSION_KEY);
@@ -67,142 +76,133 @@ function App() {
     setSessionId(sid);
   }, []);
 
-  const botReply = (text) => {
-    setMessages((prev) => [...prev, { id: Date.now(), sender: "bot", text }]);
+  const speak = (text) => {
+    if (!("speechSynthesis" in window) || !text) return;
+
+    const lang = detectLang(text);
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = lang;
+    utterance.rate = 0.95;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+
+    utterance.onerror = (err) => console.error("Speech synthesis error:", err);
+    window.speechSynthesis.speak(utterance);
   };
 
-  // ---------------------- SEND MESSAGE TO AI ----------------------
-  const handleSend = async (e) => {
-    e.preventDefault();
-    if (!input.trim()) return;
+  const botReply = (text, speakIt = true) => {
+    setMessages((prev) => [...prev, { id: Date.now(), sender: "bot", text }]);
+    if (speakIt) speak(text);
+  };
 
-    const userMessage = input;
-    setMessages((prev) => [...prev, { id: Date.now(), sender: "user", text: userMessage }]);
-    setInput("");
+  const updateDynamicMenu = (items) => {
+    const cat = items[0]?.catigory?.toLowerCase() || "custom";
+
+    MENU[cat] = items.map((i) => ({
+      id: i.id,
+      name: i.name,
+      price: parseInt(i.price, 10),
+      image_url: i.image_url || null,
+    }));
+
+    setCurrentCategory(cat);
+
+    // Optional: Speak a short menu summary in correct language
+    const lang = detectLang(items.map((x) => x.name).join(" "));
+    const sample = items.slice(0, 5).map((x) => x.name).join("، ");
+    const summary =
+      lang === "ar-SA"
+        ? `هذه بعض عناصر القائمة: ${sample}${items.length > 5 ? ` وغيرها ${items.length - 5} عناصر` : ""}.`
+        : `Here are some items: ${sample}${items.length > 5 ? ` and ${items.length - 5} more` : ""}.`;
+
+    speak(summary);
+  };
+
+  const callChatbot = async (userText) => {
+    const lang = detectLang(userText);
+
+    // Add user msg once here (IMPORTANT: don’t add it somewhere else too)
+    setMessages((prev) => [...prev, { id: Date.now(), sender: "user", text: userText }]);
 
     try {
       const response = await fetch(N8N_CHAT_WEBHOOK, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          user_message: userMessage,
-          conversation: messages,
+          user_message: userText,
+          conversation: messagesRef.current, // latest
           session_id: sessionId,
+          // optional hint for n8n prompt routing:
+          language: lang,
         }),
       });
 
+      if (!response.ok) {
+        const t = await response.text();
+        console.error("Chatbot error:", response.status, t);
+        botReply(lang === "ar-SA" ? "❌ حدث خطأ في الخدمة." : "❌ Service error.");
+        return;
+      }
+
       const data = await response.json();
-      const output = data?.output;
-      if (!output) return botReply("⚠️ Unexpected AI response.");
+      const output = data?.output || data;
 
-      if (output.response) botReply(output.response);
+      const responseText = output?.response || output?.message || output?.text;
+      const menuItems = output?.["menu items"] || output?.menuItems || output?.items;
 
-      if (output["menu items"]?.length > 0) updateDynamicMenu(output["menu items"]);
+      if (responseText) botReply(responseText, true);
+      else botReply(lang === "ar-SA" ? "لم أفهم، هل يمكنك إعادة المحاولة؟" : "I didn’t understand. Please try again.", true);
 
+      if (menuItems && menuItems.length > 0) updateDynamicMenu(menuItems);
     } catch (err) {
-      console.error(err);
-      botReply("❌ AI service unavailable.");
+      console.error("Chatbot request failed:", err);
+      botReply(lang === "ar-SA" ? "❌ تعذر الاتصال بالخدمة." : "❌ Cannot connect to service.");
     }
   };
 
-  const updateDynamicMenu = (items) => {
-    let cat = items[0]?.catigory?.toLowerCase() || "custom";
-
-    MENU[cat] = items.map((i) => ({
-      id: i.id,
-      name: i.name,
-      price: parseInt(i.price),
-      image_url: i.image_url || null,
-    }));
-
-    setCurrentCategory(cat);
+  // ---------------------- SEND MESSAGE (TEXT) ----------------------
+  const handleSend = async (e) => {
+    e.preventDefault();
+    if (!input.trim()) return;
+    const userMessage = input.trim();
+    setInput("");
+    await callChatbot(userMessage);
   };
 
   const addToOrder = (item) => {
     setOrder((prev) => [...prev, item]);
-    botReply(`Added ${item.name} (${item.price} SAR) to your order.`);
+
+    const msg =
+      detectLang(item.name) === "ar-SA"
+        ? `تمت إضافة ${item.name} (${item.price} ريال) إلى طلبك.`
+        : `Added ${item.name} (${item.price} SAR) to your order.`;
+
+    botReply(msg, true);
   };
 
-  const total = order.reduce((sum, x) => sum + x.price, 0);
+  const total = useMemo(() => order.reduce((sum, x) => sum + (x.price || 0), 0), [order]);
 
-  // ---------------------- OPEN MODAL ----------------------
-  const handleConfirmOrder = () => {
-    setShowModal(true);
-  };
+  const handleConfirmOrder = () => setShowModal(true);
 
-  // ---------------------- FORMAT WHATSAPP MESSAGE ----------------------
-  const formatOrderMessage = () => {
-    const itemsText = order.map((i) => `- ${i.name} — ${i.price} SAR`).join("\n");
-
-    return `
-New Order Received 🍽️
-
-👤 Customer: ${customerName}
-📞 Phone: ${customerNumber}
-🧾 Session ID: ${sessionId}
-
-🛒 Items:
-${itemsText}
-
-💰 Total: ${total} SAR
-
-Sent from Zuccess Restaurant AI Assistant 🤖
-    `;
-  };
-
-  // ---------------------- NOTIFY KITCHEN ----------------------
-  const notifyKitchen = async () => {
-    try {
-      const order_text = formatOrderMessage();
-
-      await fetch(N8N_KITCHEN_WEBHOOK, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          customer_name: customerName,
-          customer_number: customerNumber,
-          total_price: total,
-          order_items: order,
-          order_text,
-          session_id: sessionId,
-        }),
-      });
-    } catch (err) {
-      console.error("WhatsApp send failed:", err);
-    }
-  };
-
-  // ---------------------- PROCESS PAYMENT & SAVE ORDER ----------------------
+  // ---------------------- PAYMENT ----------------------
   const saveOrder = async () => {
-    setModalSuccess("");
     setModalError("");
 
-    // Validate customer details
-    if (!customerName.trim()) {
-      setModalError("❌ Please enter customer name.");
-      return;
-    }
-
-    if (!customerNumber.trim()) {
-      setModalError("❌ Please enter customer number.");
-      return;
-    }
-
-    if (total <= 0) {
-      setModalError("❌ Order total must be greater than 0.");
-      return;
-    }
+    if (!customerName.trim()) return setModalError("❌ Please enter customer name.");
+    if (!customerNumber.trim()) return setModalError("❌ Please enter customer number.");
+    if (total <= 0) return setModalError("❌ Order total must be greater than 0.");
 
     setIsProcessingPayment(true);
 
     try {
-      // Step 1: Create Stripe Checkout Session
       const response = await fetch(`${BACKEND_API}/create-checkout-session`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          customer_name: customerName,
-          customer_number: customerNumber,
+          customer_name: customerName.trim(),
+          customer_number: customerNumber.trim(),
           total_price: total,
           order_items: order,
           session_id: sessionId,
@@ -210,36 +210,57 @@ Sent from Zuccess Restaurant AI Assistant 🤖
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        setModalError("❌ Failed to initialize payment. Please try again.");
+        const t = await response.text();
+        console.error("Checkout error:", response.status, t);
+        setModalError("❌ Failed to initialize payment.");
         setIsProcessingPayment(false);
         return;
       }
 
       const data = await response.json();
-      const checkoutUrl = data.checkout_url;
-
-      if (!checkoutUrl) {
-        setModalError("❌ Payment initialization failed. Please try again.");
+      if (!data.checkout_url) {
+        setModalError("❌ Payment initialization failed.");
         setIsProcessingPayment(false);
         return;
       }
 
-      // Step 2: Redirect to Stripe Checkout
-      // The webhook will handle saving order and notifying kitchen after successful payment
-      window.location.href = checkoutUrl;
-
+      window.location.href = data.checkout_url;
     } catch (err) {
       console.error("Payment error:", err);
-      setModalError("❌ Network error. Please check your connection and try again.");
+      setModalError("❌ Network error. Please try again.");
       setIsProcessingPayment(false);
     }
+  };
+
+  // ---------------------- VOICE BUTTON ----------------------
+  const handleMicClick = async () => {
+    if (isListening) {
+      setIsListening(false);
+      await stopVoiceCapture();
+      return;
+    }
+
+    setIsListening(true);
+
+    // We’ll listen in Arabic by default (better for your region),
+    // but we still auto-detect per phrase for TTS + chatbot.
+    const sttLang = "ar-SA";
+
+    await startVoiceCapture(
+      async (finalText) => {
+        // IMPORTANT: do NOT add user msg here (callChatbot does it once)
+        await callChatbot(finalText);
+        setIsListening(false);
+        await stopVoiceCapture();
+      },
+      sessionId,
+      sttLang
+    );
   };
 
   // ---------------------- UI ----------------------
   return (
     <div className="app-shell">
-      {/* HEADER */}
       <header className="top-bar">
         <div>
           <h1 className="brand">Zuccess (زَكسِس) – Order AI</h1>
@@ -248,15 +269,14 @@ Sent from Zuccess Restaurant AI Assistant 🤖
         <div className="status-pill">Online</div>
       </header>
 
-      {/* MAIN LAYOUT */}
       <div className="main-layout">
-
         {/* LEFT SIDE */}
         <div className="left-pane">
-
           {/* MENU */}
           <section className="panel menu-panel">
-            <div className="panel-header"><h2>🍽️ Menu</h2></div>
+            <div className="panel-header">
+              <h2>🍽️ Menu</h2>
+            </div>
 
             <div className="category-pills">
               {Object.keys(CATEGORY_LABELS).map((key) => (
@@ -274,7 +294,6 @@ Sent from Zuccess Restaurant AI Assistant 🤖
               <div className="menu-grid">
                 {MENU[currentCategory].map((item) => (
                   <div key={item.id} className="menu-card">
-
                     {item.image_url && (
                       <img src={item.image_url} alt={item.name} className="menu-img" />
                     )}
@@ -291,7 +310,9 @@ Sent from Zuccess Restaurant AI Assistant 🤖
                 ))}
               </div>
             ) : (
-              <div className="menu-placeholder"><p>Ask the bot: "Show me pizzas"</p></div>
+              <div className="menu-placeholder">
+                <p>Ask the bot: "Show me pizzas" أو "ورّيني البيتزا"</p>
+              </div>
             )}
           </section>
 
@@ -311,11 +332,20 @@ Sent from Zuccess Restaurant AI Assistant 🤖
             <form className="input-row" onSubmit={handleSend}>
               <input
                 type="text"
-                placeholder="اكتب طلبك هنا..."
+                placeholder="Speak or type... / تكلم أو اكتب..."
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
               />
+
               <button type="submit">Send</button>
+
+              <button
+                type="button"
+                className={`mic-btn ${isListening ? "listening" : ""}`}
+                onClick={handleMicClick}
+              >
+                {isListening ? "⏹️" : "🎤"}
+              </button>
             </form>
           </section>
         </div>
@@ -330,7 +360,9 @@ Sent from Zuccess Restaurant AI Assistant 🤖
             <>
               <ul className="order-list">
                 {order.map((item, idx) => (
-                  <li key={idx}>{item.name} — {item.price} SAR</li>
+                  <li key={idx}>
+                    {item.name} — {item.price} SAR
+                  </li>
                 ))}
               </ul>
 
@@ -364,23 +396,18 @@ Sent from Zuccess Restaurant AI Assistant 🤖
               onChange={(e) => setCustomerNumber(e.target.value)}
             />
 
-            {modalSuccess && <p className="modal-success">{modalSuccess}</p>}
             {modalError && <p className="modal-error">{modalError}</p>}
 
             <div style={{ marginTop: "10px", fontSize: "14px", color: "#666" }}>
               Total to pay: <strong>{total} SAR</strong>
             </div>
 
-            <button 
-              className="save-btn" 
-              onClick={saveOrder}
-              disabled={isProcessingPayment}
-              style={{ opacity: isProcessingPayment ? 0.6 : 1, cursor: isProcessingPayment ? "not-allowed" : "pointer" }}
-            >
+            <button className="save-btn" onClick={saveOrder} disabled={isProcessingPayment}>
               {isProcessingPayment ? "Processing Payment..." : "Pay & Confirm Order"}
             </button>
-            <button 
-              className="cancel-btn" 
+
+            <button
+              className="cancel-btn"
               onClick={() => setShowModal(false)}
               disabled={isProcessingPayment}
             >
