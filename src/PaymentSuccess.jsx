@@ -32,11 +32,20 @@ export default function PaymentSuccess() {
         const data = await response.json().catch(() => ({}));
 
         if (!response.ok) {
-          throw new Error(data.error || "Payment verification failed");
+          const errorMsg = data.details || data.error || "Payment verification failed";
+          console.error("Payment verification error:", data);
+          throw new Error(errorMsg);
         }
 
+        // Check if order was actually processed
+        const wasProcessed = data.processed === "true" || data.processed_via === "fallback";
+        
         setStatus("success");
-        setMessage("✅ Payment verified. Your order is being processed and will be sent to WhatsApp.");
+        setMessage(
+          wasProcessed 
+            ? "✅ Payment verified. Your order has been processed and sent to the kitchen. Invoice will be sent to WhatsApp."
+            : "✅ Payment verified. Your order is being processed."
+        );
 
         setTimeout(() => navigate("/"), 4000);
       } catch (err) {

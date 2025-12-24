@@ -11,6 +11,7 @@ app.use("/stripe-webhook", express.raw({ type: "application/json" }));
 
 // JSON for all other routes
 app.use(express.json());
+console.log("STRIPE_SECRET_KEY:", process.env.STRIPE_SECRET_KEY);
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -74,30 +75,45 @@ async function saveOrderToDB({ customerName, customerNumber, totalPrice, orderIt
 }
 
 async function notifyKitchen({ customerName, customerNumber, totalPrice, orderItems, sessionId, orderText }) {
+  console.log("📤 Sending to kitchen webhook:", N8N_KITCHEN_WEBHOOK);
+  
+  const payload = {
+    customer_name: customerName,
+    customer_number: customerNumber,
+    total_price: totalPrice,
+    order_items: orderItems,
+    order_text: orderText,
+    session_id: sessionId,
+  };
+  
+  console.log("📤 Kitchen payload:", JSON.stringify(payload, null, 2));
+  
   const r = await fetch(N8N_KITCHEN_WEBHOOK, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      customer_name: customerName,
-      customer_number: customerNumber,
-      total_price: totalPrice,
-      order_items: orderItems,
-      order_text: orderText,
-      session_id: sessionId,
-    }),
+    body: JSON.stringify(payload),
   });
 
   const t = await r.text();
-  if (!r.ok) throw new Error(`kitchen_order failed: ${r.status} ${t}`);
+  console.log(`📤 Kitchen response: ${r.status} ${r.statusText}`, t);
+  
+  if (!r.ok) {
+    throw new Error(`kitchen_order failed: ${r.status} ${r.statusText} - ${t}`);
+  }
   return true;
 }
 
 async function sendInvoiceToCustomer({ customerName, customerNumber, orderItems, totalPrice }) {
+  console.log("📧 Sending invoice to customer:", customerNumber);
+  
   let toNumber = String(customerNumber || "").trim();
   if (!toNumber.startsWith("whatsapp:")) toNumber = `whatsapp:${toNumber}`;
 
   const orderItemsString = formatOrderItemsString(orderItems);
-  if (!orderItemsString) throw new Error("Invoice items string is empty");
+  if (!orderItemsString) {
+    console.error("❌ Invoice items string is empty for orderItems:", orderItems);
+    throw new Error("Invoice items string is empty");
+  }
 
   const payload = {
     To: toNumber,
@@ -110,6 +126,9 @@ async function sendInvoiceToCustomer({ customerName, customerNumber, orderItems,
     },
   };
 
+  console.log("📧 Invoice payload:", JSON.stringify(payload, null, 2));
+  console.log("📧 Invoice webhook URL:", INVOICE_WEBHOOK_URL);
+
   const r = await fetch(INVOICE_WEBHOOK_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -117,7 +136,11 @@ async function sendInvoiceToCustomer({ customerName, customerNumber, orderItems,
   });
 
   const t = await r.text();
-  if (!r.ok) throw new Error(`send-invoice failed: ${r.status} ${t}`);
+  console.log(`📧 Invoice response: ${r.status} ${r.statusText}`, t);
+  
+  if (!r.ok) {
+    throw new Error(`send-invoice failed: ${r.status} ${r.statusText} - ${t}`);
+  }
   return true;
 }
 
@@ -177,24 +200,188 @@ app.post("/create-checkout-session", async (req, res) => {
   }
 });
 
-// ======== VERIFY PAYMENT (READ-ONLY) ========
+// ======== PROCESS ORDER (shared logic) ========
+async function processOrder(session) {
+  // Parse metadata
+  if (!session.metadata?.order) throw new Error("Missing order metadata");
+  if (!session.metadata?.customer_name || !session.metadata?.customer_number) throw new Error("Missing customer metadata");
+
+  let orderItems = JSON.parse(session.metadata.order);
+  if (!Array.isArray(orderItems) || orderItems.length === 0) throw new Error("Empty order items");
+
+  orderItems = orderItems.map((x) => ({
+    id: x.id || "unknown",
+    name: x.name || "Unknown Item",
+    price: Number(x.price || 0),
+  }));
+
+  const customerName = session.metadata.customer_name;
+  const customerNumber = session.metadata.customer_number;
+  const restaurantSessionId = session.metadata.session_id || "no-session";
+  const totalPrice = (session.amount_total || 0) / 100;
+
+  const orderText = formatKitchenText({
+    customerName,
+    customerNumber,
+    sessionId: restaurantSessionId,
+    orderItems,
+    totalPrice,
+  });
+
+  console.log("📦 Processing order for:", customerName, customerNumber);
+  console.log("📦 Order details:", { customerName, customerNumber, totalPrice, itemCount: orderItems.length });
+
+  const results = {
+    saved: false,
+    kitchenNotified: false,
+    invoiceSent: false,
+    errors: []
+  };
+
+  // Process all steps with individual error handling
+  try {
+    await saveOrderToDB({ customerName, customerNumber, totalPrice, orderItems, sessionId: restaurantSessionId });
+    console.log("✅ Order saved to DB");
+    results.saved = true;
+  } catch (err) {
+    console.error("❌ Failed to save order to DB:", err.message);
+    results.errors.push(`DB save failed: ${err.message}`);
+    // Continue processing even if DB save fails
+  }
+
+  try {
+    await notifyKitchen({ customerName, customerNumber, totalPrice, orderItems, sessionId: restaurantSessionId, orderText });
+    console.log("✅ Kitchen notified");
+    results.kitchenNotified = true;
+  } catch (err) {
+    console.error("❌ Failed to notify kitchen:", err.message);
+    console.error("❌ Kitchen error details:", err);
+    results.errors.push(`Kitchen notification failed: ${err.message}`);
+    // Continue processing even if kitchen notification fails
+  }
+
+  try {
+    await sendInvoiceToCustomer({ customerName, customerNumber, orderItems, totalPrice });
+    console.log("✅ Invoice sent to customer");
+    results.invoiceSent = true;
+  } catch (err) {
+    console.error("❌ Failed to send invoice:", err.message);
+    console.error("❌ Invoice error details:", err);
+    results.errors.push(`Invoice send failed: ${err.message}`);
+    // Continue processing even if invoice send fails
+  }
+
+  // Log final results
+  console.log("📊 Processing results:", results);
+
+  // If all steps failed, throw an error
+  if (!results.saved && !results.kitchenNotified && !results.invoiceSent) {
+    throw new Error(`All processing steps failed: ${results.errors.join(", ")}`);
+  }
+
+  // If some steps failed, log warning but don't throw
+  if (results.errors.length > 0) {
+    console.warn("⚠️ Some steps failed but continuing:", results.errors);
+  }
+
+  return { success: true, results };
+}
+
+// ======== VERIFY PAYMENT (with fallback processing) ========
 app.post("/verify-payment", async (req, res) => {
+  console.log("🔍 Verify payment called with session_id:", req.body?.session_id);
+  
   try {
     const { session_id } = req.body;
-    if (!session_id) return res.status(400).json({ error: "Missing session_id" });
+    if (!session_id) {
+      console.error("❌ Missing session_id in request");
+      return res.status(400).json({ error: "Missing session_id" });
+    }
 
+    console.log("🔍 Retrieving Stripe session:", session_id);
     const session = await stripe.checkout.sessions.retrieve(session_id);
 
+    console.log("🔍 Session status:", {
+      payment_status: session.payment_status,
+      processed: session.metadata?.processed,
+      has_metadata: !!session.metadata
+    });
+
     if (session.payment_status !== "paid") {
+      console.warn("⚠️ Payment not completed, status:", session.payment_status);
       return res.status(400).json({ error: "Payment not completed", status: session.payment_status });
     }
 
-    // IMPORTANT: no saving, no kitchen, no invoice here
+    const processed = session.metadata?.processed;
+    console.log("🔍 Current processed status:", processed);
+
+    // ✅ ALWAYS PROCESS: If not successfully processed yet, process it here
+    // This ensures invoice and kitchen notification ALWAYS happen after payment
+    // We check only for "true" - if it's "processing" or "error", we'll retry
+    if (processed !== "true") {
+      console.log("⚠️ Order not processed yet (status: " + processed + "), processing now via verify-payment");
+      
+      try {
+        // Mark as processing to prevent duplicate processing
+        await stripe.checkout.sessions.update(session_id, {
+          metadata: { ...session.metadata, processed: "processing" },
+        }).catch(err => console.warn("Warning: Could not update metadata:", err.message));
+
+        // Process the order (save DB, notify kitchen, send invoice)
+        console.log("🚀 Starting order processing...");
+        const processResult = await processOrder(session);
+
+        // Mark as processed
+        await stripe.checkout.sessions.update(session_id, {
+          metadata: { ...session.metadata, processed: "true" },
+        }).catch(err => console.warn("Warning: Could not update metadata to processed:", err.message));
+
+        console.log("✅ Order processed successfully via verify-payment:", session_id);
+        console.log("✅ Process result:", processResult);
+        
+        return res.json({
+          success: true,
+          paid: true,
+          processed: "true",
+          message: "Payment verified and order processed successfully",
+          processed_via: "verify-payment",
+          results: processResult.results,
+        });
+      } catch (processErr) {
+        console.error("❌ Processing error:", processErr);
+        console.error("❌ Full error stack:", processErr.stack);
+        
+        // Mark error with detailed message but don't fail the response
+        try {
+          await stripe.checkout.sessions.update(session_id, {
+            metadata: { 
+              ...session.metadata, 
+              processed: "error",
+              error_message: String(processErr.message || "Unknown error").substring(0, 100)
+            },
+          });
+        } catch (updateErr) {
+          console.error("❌ Failed to update session metadata:", updateErr);
+        }
+        
+        // Still return success but with error details
+        return res.status(500).json({
+          success: false,
+          paid: true,
+          error: "Payment verified but order processing failed",
+          details: processErr.message,
+          processed: "error",
+        });
+      }
+    }
+
+    // Already successfully processed
+    console.log("✅ Order already processed successfully");
     return res.json({
       success: true,
       paid: true,
-      processed: session.metadata?.processed || "unknown",
-      message: "Payment verified",
+      processed: "true",
+      message: "Payment verified and order already processed",
     });
   } catch (err) {
     console.error("Verify payment error:", err);
@@ -204,6 +391,8 @@ app.post("/verify-payment", async (req, res) => {
 
 // ======== STRIPE WEBHOOK (THE ONLY PROCESSOR) ========
 app.post("/stripe-webhook", async (req, res) => {
+  console.log("🔥 STRIPE WEBHOOK HIT");
+
   const sig = req.headers["stripe-signature"];
 
   let event;
@@ -230,64 +419,49 @@ app.post("/stripe-webhook", async (req, res) => {
       return res.json({ received: true, skipped: true });
     }
 
+    // Skip if already processing (avoid race condition with verify-payment fallback)
+    if (full.metadata?.processed === "processing") {
+      console.log("⚠️ Webhook: order is being processed elsewhere, skipping", full.id);
+      return res.json({ received: true, skipped: true, reason: "already_processing" });
+    }
+
     // Mark processing ASAP
     await stripe.checkout.sessions.update(full.id, {
       metadata: { ...full.metadata, processed: "processing" },
     });
 
-    // Parse metadata
-    if (!full.metadata?.order) throw new Error("Missing order metadata");
-    if (!full.metadata?.customer_name || !full.metadata?.customer_number) throw new Error("Missing customer metadata");
+    console.log("🔥 Webhook: Starting order processing for session:", full.id);
 
-    let orderItems = JSON.parse(full.metadata.order);
-    if (!Array.isArray(orderItems) || orderItems.length === 0) throw new Error("Empty order items");
-
-    orderItems = orderItems.map((x) => ({
-      id: x.id || "unknown",
-      name: x.name || "Unknown Item",
-      price: Number(x.price || 0),
-    }));
-
-    const customerName = full.metadata.customer_name;
-    const customerNumber = full.metadata.customer_number;
-    const restaurantSessionId = full.metadata.session_id || "no-session";
-    const totalPrice = (full.amount_total || 0) / 100;
-
-    const orderText = formatKitchenText({
-      customerName,
-      customerNumber,
-      sessionId: restaurantSessionId,
-      orderItems,
-      totalPrice,
-    });
-
-    // ✅ DO WORK ONCE HERE
-    await saveOrderToDB({ customerName, customerNumber, totalPrice, orderItems, sessionId: restaurantSessionId });
-    await notifyKitchen({ customerName, customerNumber, totalPrice, orderItems, sessionId: restaurantSessionId, orderText });
-    await sendInvoiceToCustomer({ customerName, customerNumber, orderItems, totalPrice });
+    // ✅ DO WORK ONCE HERE using shared function
+    await processOrder(full);
 
     // Mark processed
     await stripe.checkout.sessions.update(full.id, {
       metadata: { ...full.metadata, processed: "true" },
     });
 
-    console.log("✅ Webhook processed order once:", full.id);
+    console.log("✅ Webhook processed order successfully:", full.id);
     return res.json({ received: true, processed: true });
   } catch (err) {
     console.error("❌ Webhook processing error:", err);
+    console.error("❌ Error details:", {
+      message: err.message,
+      stack: err.stack,
+      sessionId: session.id,
+    });
 
     // Mark error so you can reprocess manually later if needed
     try {
       const full = await stripe.checkout.sessions.retrieve(session.id);
       await stripe.checkout.sessions.update(full.id, {
-        metadata: { ...full.metadata, processed: "error" },
+        metadata: { ...full.metadata, processed: "error", error_message: err.message },
       });
     } catch (e) {
       console.error("Failed to mark webhook error:", e);
     }
 
-    // Always ACK Stripe
-    return res.json({ received: true, processed: false, error: true });
+    // Always ACK Stripe (return 200 to prevent retries if it's a permanent error)
+    return res.json({ received: true, processed: false, error: true, error_message: err.message });
   }
 });
 
