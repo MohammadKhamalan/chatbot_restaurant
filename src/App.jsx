@@ -1,3 +1,4 @@
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { startVoiceCapture, stopVoiceCapture } from "./voice/useVoiceInput";
@@ -33,20 +34,16 @@ const generateRandomSessionId = () => {
     .join("");
 };
 
-// Detect Arabic
-const isArabicText = (text) => /[\u0600-\u06FF]/.test(text || "");
-
-// Pick lang for STT/TTS
-const detectLang = (text) => (isArabicText(text) ? "ar-SA" : "en-US");
+const AR_LANG = "ar-SA";
 
 function App() {
   const [messages, setMessages] = useState([
-    {
-      id: 1,
-      sender: "bot",
-      text: "Welcome to Zuccess (زَكسِس)! ✨\nAsk me anything… drinks, desserts, pizzas, etc.",
-    },
-  ]);
+  {
+    id: 1,
+    sender: "bot",
+    text: "مرحبًا بك في زَكسِس ✨\nاسألني عن البيتزا، المشروبات، الحلويات أو أي شيء في القائمة.",
+  },
+]);
 
   const [input, setInput] = useState("");
   const [currentCategory, setCurrentCategory] = useState(null);
@@ -76,21 +73,25 @@ function App() {
     setSessionId(sid);
   }, []);
 
-  const speak = (text) => {
-    if (!("speechSynthesis" in window) || !text) return;
+ const speak = (text) => {
+  if (!("speechSynthesis" in window) || !text) return;
 
-    const lang = detectLang(text);
+  window.speechSynthesis.cancel();
 
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = lang;
-    utterance.rate = 0.95;
-    utterance.pitch = 1.0;
-    utterance.volume = 1.0;
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = "ar-SA";          // ✅ FORCE ARABIC
+  utterance.rate = 0.95;
+  utterance.pitch = 1.0;
+  utterance.volume = 1.0;
 
-    utterance.onerror = (err) => console.error("Speech synthesis error:", err);
-    window.speechSynthesis.speak(utterance);
-  };
+  // Prefer Arabic voice if available
+  const voices = window.speechSynthesis.getVoices();
+  const arabicVoice = voices.find(v => v.lang.startsWith("ar"));
+  if (arabicVoice) utterance.voice = arabicVoice;
+
+  window.speechSynthesis.speak(utterance);
+};
+
 
   const botReply = (text, speakIt = true) => {
     setMessages((prev) => [...prev, { id: Date.now(), sender: "bot", text }]);
@@ -98,30 +99,36 @@ function App() {
   };
 
   const updateDynamicMenu = (items) => {
-    const cat = items[0]?.catigory?.toLowerCase() || "custom";
+  const cat = items[0]?.catigory?.toLowerCase() || "custom";
 
-    MENU[cat] = items.map((i) => ({
-      id: i.id,
-      name: i.name,
-      price: parseInt(i.price, 10),
-      image_url: i.image_url || null,
-    }));
+  MENU[cat] = items.map((i) => ({
+    id: i.id,
+    name: i.name,
+    price: parseInt(i.price, 10),
+    image_url: i.image_url || null,
+  }));
 
-    setCurrentCategory(cat);
+  setCurrentCategory(cat);
 
-    // Optional: Speak a short menu summary in correct language
-    const lang = detectLang(items.map((x) => x.name).join(" "));
-    const sample = items.slice(0, 5).map((x) => x.name).join("، ");
-    const summary =
-      lang === "ar-SA"
-        ? `هذه بعض عناصر القائمة: ${sample}${items.length > 5 ? ` وغيرها ${items.length - 5} عناصر` : ""}.`
-        : `Here are some items: ${sample}${items.length > 5 ? ` and ${items.length - 5} more` : ""}.`;
+  // 🗣️ رسائل عربية عامة حسب الفئة
+  let message = "هذه هي القائمة المتاحة";
 
-    speak(summary);
-  };
+  if (cat === "drinks") {
+    message = "هذه قائمة المشروبات المتاحة ";
+  } else if (cat === "pizzas") {
+    message = "هذه قائمة البيتزا المتاحة ";
+  } else if (cat === "desserts") {
+    message = "هذه قائمة الحلويات المتاحة ";
+  } else if (cat === "appetizers") {
+    message = "هذه قائمة المقبلات المتاحة ";
+  }
+
+  botReply(message, true);
+};
+
 
   const callChatbot = async (userText) => {
-    const lang = detectLang(userText);
+   
 
     // Add user msg once here (IMPORTANT: don’t add it somewhere else too)
     setMessages((prev) => [...prev, { id: Date.now(), sender: "user", text: userText }]);
@@ -135,14 +142,14 @@ function App() {
           conversation: messagesRef.current, // latest
           session_id: sessionId,
           // optional hint for n8n prompt routing:
-          language: lang,
         }),
       });
 
       if (!response.ok) {
         const t = await response.text();
         console.error("Chatbot error:", response.status, t);
-        botReply(lang === "ar-SA" ? "❌ حدث خطأ في الخدمة." : "❌ Service error.");
+        botReply(" حدث خطأ في الخدمة.");
+
         return;
       }
 
@@ -153,12 +160,12 @@ function App() {
       const menuItems = output?.["menu items"] || output?.menuItems || output?.items;
 
       if (responseText) botReply(responseText, true);
-      else botReply(lang === "ar-SA" ? "لم أفهم، هل يمكنك إعادة المحاولة؟" : "I didn’t understand. Please try again.", true);
+else botReply("لم أفهم طلبك، هل يمكنك المحاولة مرة أخرى؟", true);
 
       if (menuItems && menuItems.length > 0) updateDynamicMenu(menuItems);
     } catch (err) {
       console.error("Chatbot request failed:", err);
-      botReply(lang === "ar-SA" ? "❌ تعذر الاتصال بالخدمة." : "❌ Cannot connect to service.");
+botReply(" تعذر الاتصال بالخدمة، حاول مرة أخرى.");
     }
   };
 
@@ -174,10 +181,7 @@ function App() {
   const addToOrder = (item) => {
     setOrder((prev) => [...prev, item]);
 
-    const msg =
-      detectLang(item.name) === "ar-SA"
-        ? `تمت إضافة ${item.name} (${item.price} ريال) إلى طلبك.`
-        : `Added ${item.name} (${item.price} SAR) to your order.`;
+    const msg = "تم إضافة العنصر حسب طلبك";
 
     botReply(msg, true);
   };

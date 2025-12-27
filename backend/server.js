@@ -103,11 +103,54 @@ async function notifyKitchen({ customerName, customerNumber, totalPrice, orderIt
   return true;
 }
 
+// Normalize phone number to E.164 format for WhatsApp
+function normalizePhoneNumber(phoneNumber) {
+  if (!phoneNumber) return null;
+  
+  let normalized = String(phoneNumber).trim();
+  
+  // Remove spaces, dashes, parentheses
+  normalized = normalized.replace(/[\s\-()]/g, "");
+  
+  // If it already starts with whatsapp:, remove it first
+  if (normalized.startsWith("whatsapp:")) {
+    normalized = normalized.substring(9);
+  }
+  
+  // Ensure it starts with + for E.164 format
+  if (!normalized.startsWith("+")) {
+    // If it starts with 0, assume Saudi Arabia (replace 0 with +966)
+    if (normalized.startsWith("0")) {
+      normalized = "+966" + normalized.substring(1);
+    } else if (normalized.startsWith("966")) {
+      // Already has country code but missing +
+      normalized = "+" + normalized;
+    } else {
+      // Assume Saudi Arabia and add +966
+      normalized = "+966" + normalized;
+    }
+  }
+  
+  // Validate E.164 format (starts with +, followed by 1-15 digits)
+  if (!/^\+[1-9]\d{1,14}$/.test(normalized)) {
+    console.warn("⚠️ Phone number may not be in valid E.164 format:", normalized);
+  }
+  
+  return normalized;
+}
+
 async function sendInvoiceToCustomer({ customerName, customerNumber, orderItems, totalPrice }) {
   console.log("📧 Sending invoice to customer:", customerNumber);
   
-  let toNumber = String(customerNumber || "").trim();
-  if (!toNumber.startsWith("whatsapp:")) toNumber = `whatsapp:${toNumber}`;
+  // Normalize phone number to E.164 format
+  let normalizedPhone = normalizePhoneNumber(customerNumber);
+  
+  if (!normalizedPhone) {
+    throw new Error("Invalid phone number: phone number is empty or null");
+  }
+  
+  const toNumber = `whatsapp:${normalizedPhone}`;
+  console.log("📧 Normalized phone number:", toNumber);
 
   const orderItemsString = formatOrderItemsString(orderItems);
   if (!orderItemsString) {
@@ -129,19 +172,30 @@ async function sendInvoiceToCustomer({ customerName, customerNumber, orderItems,
   console.log("📧 Invoice payload:", JSON.stringify(payload, null, 2));
   console.log("📧 Invoice webhook URL:", INVOICE_WEBHOOK_URL);
 
-  const r = await fetch(INVOICE_WEBHOOK_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(payload),
-  });
+  try {
+    const r = await fetch(INVOICE_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    });
 
-  const t = await r.text();
-  console.log(`📧 Invoice response: ${r.status} ${r.statusText}`, t);
-  
-  if (!r.ok) {
-    throw new Error(`send-invoice failed: ${r.status} ${r.statusText} - ${t}`);
+    const t = await r.text();
+    console.log(`📧 Invoice response status: ${r.status} ${r.statusText}`);
+    console.log(`📧 Invoice response body:`, t);
+    
+    if (!r.ok) {
+      const errorMsg = `send-invoice failed: ${r.status} ${r.statusText} - ${t}`;
+      console.error("❌ Invoice webhook error:", errorMsg);
+      throw new Error(errorMsg);
+    }
+    
+    console.log("✅ Invoice sent successfully to:", toNumber);
+    return true;
+  } catch (err) {
+    console.error("❌ Invoice sending exception:", err.message);
+    console.error("❌ Full error:", err);
+    throw err;
   }
-  return true;
 }
 
 // ======== CREATE CHECKOUT SESSION ========
