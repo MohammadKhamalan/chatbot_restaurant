@@ -376,7 +376,8 @@ const openModal = () => {
 const [customerName, setCustomerName] = useState("");
 const [customerPhone, setCustomerPhone] = useState("");
 const [isPaying, setIsPaying] = useState(false);
-const BACKEND_API = "http://localhost:4242"; // change if deployed
+// Use environment variable for production, fallback to localhost for development
+const BACKEND_API = process.env.REACT_APP_BACKEND_API || "http://localhost:4242";
 
   const [menuState, setMenuState] = useState(INITIAL_MENU);
   const [currentCategory, setCurrentCategory] = useState(null);
@@ -609,13 +610,24 @@ const finalizeCashOrder = async () => {
   };
 
   try {
+    console.log("💳 Sending verify-payment to:", `${BACKEND_API}/verify-payment`);
+    console.log("💳 Payload:", payload);
+    
     const res = await fetch(`${BACKEND_API}/verify-payment`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
 
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      console.error("❌ Verify payment failed:", res.status, errorData);
+      throw new Error(`HTTP ${res.status}: ${errorData.message || "فشل التحقق من الدفع"}`);
+    }
+
     const data = await res.json();
+    console.log("✅ Verify payment response:", data);
+    
     if (data.success) {
       botReply("✅ تم تقديم طلبك بنجاح!");
       setModalStep(null);
@@ -624,8 +636,8 @@ const finalizeCashOrder = async () => {
       botReply("❌ حدث خطأ في طلبك، الرجاء المحاولة مرة أخرى.");
     }
   } catch (err) {
-    console.error(err);
-    botReply("❌ لم يتم إتمام طلبك، حاول مرة أخرى.");
+    console.error("❌ Error in finalizeCashOrder:", err);
+    botReply(`❌ لم يتم إتمام طلبك: ${err.message || "حدث خطأ غير متوقع"}. حاول مرة أخرى.`);
   }
 };
 
@@ -674,8 +686,12 @@ const finalizeCashOrder = async () => {
 
 
   const callWebhook = async (transcript = "") => {
-    if (!sessionId) return;
+    if (!sessionId) {
+      console.error("No session ID available");
+      return;
+    }
     
+    console.log("🔵 Starting webhook call with transcript:", transcript);
     setIsLoadingWebhook(true);
     
     // Detect category from transcript
@@ -689,14 +705,20 @@ const finalizeCashOrder = async () => {
         body: JSON.stringify({ session_id: sessionId, transcript }),
       });
 
+      if (!r.ok) {
+        throw new Error(`HTTP error! status: ${r.status}`);
+      }
+
       const raw = await r.json();
 
       // 🔥 n8n returns ARRAY or object
       const data = Array.isArray(raw) ? raw[0] : raw;
 
+      console.log("✅ WEBHOOK RESPONSE RECEIVED");
       console.log("WEBHOOK DATA:", data);
       console.log("Audio field:", data?.audio);
       console.log("Items field:", data?.items);
+      console.log("Order field:", data?.order);
 
       // Handle items - check multiple possible locations
       const items = data?.items || data?.output?.items || data?.response?.items;
@@ -808,14 +830,22 @@ if (voiceOrder && voiceOrder.length > 0) {
     }, 500);
   }
 
-      if (items) {
+      if (items && items.length > 0) {
         console.log("📦 Found items:", items);
         const normalized = normalizeN8nItems(items, detectedCategory);
         const categoryToUse = detectedCategory || 
           (normalized[0]?.category_name ? CATEGORY_MAP[normalized[0].category_name] : null);
         
+        console.log("📦 Normalized items:", normalized);
+        console.log("📦 Setting webhookItems:", normalized);
+        
+        // Update webhook items for display
+        setWebhookItems(normalized);
+        
+        // Update dynamic menu
         updateDynamicMenu(normalized, categoryToUse);
       } else {
+        console.log("⚠️ No items found in response");
         setWebhookItems([]);
         // If no items but category was detected, still switch to that category
         if (detectedCategory) {
@@ -823,15 +853,32 @@ if (voiceOrder && voiceOrder.length > 0) {
         }
       }
     } catch (error) {
-      console.error("Webhook error:", error);
+      console.error("❌ Webhook error:", error);
+      console.error("Error details:", error.message, error.stack);
       botReply("فشل الاتصال بالخدمة، الرجاء المحاولة مرة أخرى.", false);
     } finally {
+      // Ensure loading state is reset even if there's an error
+      console.log("🔄 Resetting loading state");
       setIsLoadingWebhook(false);
     }
   };
 
   const sendVoiceToWorkflow = async (text) => {
-    await callWebhook(text);
+    if (!text || !text.trim()) {
+      console.warn("⚠️ Empty text in sendVoiceToWorkflow");
+      return;
+    }
+    
+    console.log("📤 Sending voice text to workflow:", text);
+    // Set loading state before calling webhook
+    setIsLoadingWebhook(true);
+    try {
+      await callWebhook(text);
+    } catch (error) {
+      console.error("❌ Error in sendVoiceToWorkflow:", error);
+      setIsLoadingWebhook(false);
+      botReply("حدث خطأ أثناء معالجة الرسالة، الرجاء المحاولة مرة أخرى.", false);
+    }
   };
 
   // Check microphone permission status
@@ -928,14 +975,24 @@ if (voiceOrder && voiceOrder.length > 0) {
     
     try {
       await startVoiceCapture(async (text) => {
-        await sendVoiceToWorkflow(text);
+        console.log("🎤 Voice text received:", text);
+        if (text && text.trim().length > 0) {
+          await sendVoiceToWorkflow(text);
+        } else {
+          console.warn("⚠️ Empty text received from voice capture");
+        }
         setIsListening(false);
         await stopVoiceCapture();
       });
     } catch (error) {
-      console.error("Failed to start voice capture:", error);
+      console.error("❌ Failed to start voice capture:", error);
       setIsListening(false);
       // Error message already shown in startVoiceCapture
+      // On mobile, sometimes we need to retry
+      if (error.message && error.message.includes("permission")) {
+        // Permission issue - user needs to grant access
+        console.log("🔒 Permission issue detected, user needs to grant access");
+      }
     }
   };
 
@@ -1149,11 +1206,23 @@ const finalizeOrder = async (method) => {
   try {
     // 💵 CASH — DIRECT SAVE
     if (method === "cash") {
-      await fetch(`${BACKEND_API}/cash-order`, {
+      console.log("💰 Sending cash order to:", `${BACKEND_API}/cash-order`);
+      console.log("💰 Payload:", payload);
+      
+      const res = await fetch(`${BACKEND_API}/cash-order`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        console.error("❌ Cash order failed:", res.status, errorData);
+        throw new Error(`HTTP ${res.status}: ${errorData.message || "فشل إرسال الطلب"}`);
+      }
+
+      const data = await res.json().catch(() => ({}));
+      console.log("✅ Cash order success:", data);
 
       alert("✅ تم تقديم الطلب. الدفع نقداً عند التوصيل.");
       resetOrder();
@@ -1161,20 +1230,33 @@ const finalizeOrder = async (method) => {
     }
 
     // 💳 CARD — STRIPE ONLY
+    console.log("💳 Sending create-checkout-session to:", `${BACKEND_API}/create-checkout-session`);
+    console.log("💳 Payload:", payload);
+    
     const res = await fetch(`${BACKEND_API}/create-checkout-session`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
 
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      console.error("❌ Create checkout session failed:", res.status, errorData);
+      throw new Error(`HTTP ${res.status}: ${errorData.message || "فشل إنشاء جلسة الدفع"}`);
+    }
+
     const data = await res.json();
-    if (!data.checkout_url) throw new Error("No Stripe URL");
+    console.log("✅ Checkout session response:", data);
+    
+    if (!data.checkout_url) {
+      throw new Error("لم يتم استلام رابط الدفع من الخادم");
+    }
 
     window.location.href = data.checkout_url;
 
   } catch (err) {
-    console.error(err);
-    alert("فشل تقديم الطلب");
+    console.error("❌ Error in handleSubmitOrder:", err);
+    alert(`فشل تقديم الطلب: ${err.message || "حدث خطأ غير متوقع"}`);
   }
 };
 
@@ -1231,19 +1313,28 @@ const finalizeOrder = async (method) => {
               </button>
             ) : (
               <>
+                {/* Loading Indicator - Show when processing voice */}
+                {isLoadingWebhook && (
+                  <div className="audio-indicator" style={{ background: 'linear-gradient(135deg, #3b1a7a, #5b21b6)' }}>
+                    <LoaderIcon />
+                    <span>🤔 يفكرر...</span>
+                  </div>
+                )}
+                
                 {/* Audio Waveform - Always visible */}
-                <AudioWaveform isListening={isListening} />
+                {!isLoadingWebhook && <AudioWaveform isListening={isListening} />}
                 
                 {/* Microphone Icon */}
                 <button
                   className={`voice-circle ${isListening ? "listening" : ""}`}
                   onClick={handleMicClick}
+                  disabled={isLoadingWebhook}
                 >
                   {isListening ? <StopIcon /> : <MicIcon />}
                 </button>
                 
                 {/* Audio Playing Indicator */}
-                {isPlayingAudio && (
+                {isPlayingAudio && !isLoadingWebhook && (
                   <div className="audio-indicator">
                     <span className="audio-wave"><SpeakerIcon /></span>
                     <span>جاري تشغيل الصوت...</span>

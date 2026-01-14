@@ -30,11 +30,29 @@ export async function startVoiceCapture(onFinalText, sessionId, sttLang = "ar-SA
   let errorCallback = null;
 
   recognition.onresult = async (event) => {
-    const transcript = event.results?.[0]?.[0]?.transcript || "";
+    console.log("🎤 Speech recognition result received:", event);
+    
+    // Handle both single and multiple results
+    let transcript = "";
+    if (event.results && event.results.length > 0) {
+      // Get the most confident result
+      const result = event.results[event.results.length - 1];
+      if (result && result.length > 0) {
+        transcript = result[0].transcript || "";
+      }
+    }
+    
     const finalText = transcript.trim();
+    console.log("🎤 Final transcript:", finalText);
 
     if (finalText) {
-      await onFinalText(finalText);
+      try {
+        await onFinalText(finalText);
+      } catch (error) {
+        console.error("Error in onFinalText callback:", error);
+      }
+    } else {
+      console.warn("⚠️ Empty transcript received");
     }
   };
 
@@ -79,6 +97,12 @@ export async function startVoiceCapture(onFinalText, sessionId, sttLang = "ar-SA
   recognition.onend = () => {
     // no auto-restart (clean)
     console.log("Speech recognition ended");
+    // On mobile, sometimes onend fires without onresult
+    // This is normal if user didn't speak or recognition timed out
+    // Clean up the recognition object
+    if (window.__voiceRecognition === recognition) {
+      window.__voiceRecognition = null;
+    }
   };
 
   try {

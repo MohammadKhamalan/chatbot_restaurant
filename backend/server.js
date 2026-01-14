@@ -17,26 +17,11 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // ======== CONFIG ========
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
-const WHATSAPP_FROM = "whatsapp:+1 864 351 6969";
 
 const N8N_SAVE_ORDER = "https://n8n.srv1004057.hstgr.cloud/webhook/trio_orders";
-const N8N_KITCHEN_WEBHOOK = "https://n8n.srv1004057.hstgr.cloud/webhook/kitchen_order";
-const INVOICE_WEBHOOK_URL = "https://zuccess.app.n8n.cloud/webhook/send-invoice";
-const INVOICE_URL = "https://res.cloudinary.com/dfp9gwmpp/raw/upload/v1765975728/result_z3xpko.pdf";
 
 // ======== HELPERS ========
-function formatOrderItemsString(orderItems) {
-  const itemCounts = {};
-  for (const item of orderItems) {
-    const name = String(item?.name || "Unknown Item").trim();
-    if (!name) continue;
-    itemCounts[name] = (itemCounts[name] || 0) + 1;
-  }
-
-  return Object.entries(itemCounts)
-    .map(([name, count]) => (count > 1 ? `${name} x${count}` : name))
-    .join(", ");
-}
+// formatOrderItemsString removed - not needed anymore
 function formatOrdersText(orderItems) {
   const counts = {};
 
@@ -93,129 +78,8 @@ async function saveOrderToDB({
 }
 
 
-async function notifyKitchen({ customerName, customerNumber, totalPrice, orderItems, sessionId, orderText }) {
-  console.log("📤 Sending to kitchen webhook:", N8N_KITCHEN_WEBHOOK);
-  
-  const payload = {
-    customer_name: customerName,
-    customer_number: customerNumber,
-    total_price: totalPrice,
-    order_items: orderItems,
-    order_text: orderText,
-    session_id: sessionId,
-  };
-  
-  console.log("📤 Kitchen payload:", JSON.stringify(payload, null, 2));
-  
-  const r = await fetch(N8N_KITCHEN_WEBHOOK, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  const t = await r.text();
-  console.log(`📤 Kitchen response: ${r.status} ${r.statusText}`, t);
-  
-  if (!r.ok) {
-    throw new Error(`kitchen_order failed: ${r.status} ${r.statusText} - ${t}`);
-  }
-  return true;
-}
-
-// Normalize phone number to E.164 format for WhatsApp
-function normalizePhoneNumber(phoneNumber) {
-  if (!phoneNumber) return null;
-  
-  let normalized = String(phoneNumber).trim();
-  
-  // Remove spaces, dashes, parentheses
-  normalized = normalized.replace(/[\s\-()]/g, "");
-  
-  // If it already starts with whatsapp:, remove it first
-  if (normalized.startsWith("whatsapp:")) {
-    normalized = normalized.substring(9);
-  }
-  
-  // Ensure it starts with + for E.164 format
-  if (!normalized.startsWith("+")) {
-    // If it starts with 0, assume Saudi Arabia (replace 0 with +966)
-    if (normalized.startsWith("0")) {
-      normalized = "+966" + normalized.substring(1);
-    } else if (normalized.startsWith("966")) {
-      // Already has country code but missing +
-      normalized = "+" + normalized;
-    } else {
-      // Assume Saudi Arabia and add +966
-      normalized = "+966" + normalized;
-    }
-  }
-  
-  // Validate E.164 format (starts with +, followed by 1-15 digits)
-  if (!/^\+[1-9]\d{1,14}$/.test(normalized)) {
-    console.warn("⚠️ Phone number may not be in valid E.164 format:", normalized);
-  }
-  
-  return normalized;
-}
-
-async function sendInvoiceToCustomer({ customerName, customerNumber, orderItems, totalPrice }) {
-  console.log("📧 Sending invoice to customer:", customerNumber);
-  
-  // Normalize phone number to E.164 format
-  let normalizedPhone = normalizePhoneNumber(customerNumber);
-  
-  if (!normalizedPhone) {
-    throw new Error("Invalid phone number: phone number is empty or null");
-  }
-  
-  const toNumber = `whatsapp:${normalizedPhone}`;
-  console.log("📧 Normalized phone number:", toNumber);
-
-  const orderItemsString = formatOrderItemsString(orderItems);
-  if (!orderItemsString) {
-    console.error("❌ Invoice items string is empty for orderItems:", orderItems);
-    throw new Error("Invoice items string is empty");
-  }
-
-  const payload = {
-    To: toNumber,
-    From: WHATSAPP_FROM,
-    ContentVariables: {
-      "1": String(customerName || "").trim(),
-      "2": orderItemsString.trim(),
-      "3": String(totalPrice || "0").trim(),
-      "4": INVOICE_URL.trim(),
-    },
-  };
-
-  console.log("📧 Invoice payload:", JSON.stringify(payload, null, 2));
-  console.log("📧 Invoice webhook URL:", INVOICE_WEBHOOK_URL);
-
-  try {
-    const r = await fetch(INVOICE_WEBHOOK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    const t = await r.text();
-    console.log(`📧 Invoice response status: ${r.status} ${r.statusText}`);
-    console.log(`📧 Invoice response body:`, t);
-    
-    if (!r.ok) {
-      const errorMsg = `send-invoice failed: ${r.status} ${r.statusText} - ${t}`;
-      console.error("❌ Invoice webhook error:", errorMsg);
-      throw new Error(errorMsg);
-    }
-    
-    console.log("✅ Invoice sent successfully to:", toNumber);
-    return true;
-  } catch (err) {
-    console.error("❌ Invoice sending exception:", err.message);
-    console.error("❌ Full error:", err);
-    throw err;
-  }
-}
+// Kitchen notification removed - only save to DB
+// Invoice sending removed - only save to DB
 
 // ======== CREATE CHECKOUT SESSION ========
 app.post("/create-checkout-session", async (req, res) => {
@@ -298,64 +162,35 @@ async function processOrder(session) {
 
   const customerName = session.metadata.customer_name;
   const customerNumber = session.metadata.customer_number;
-  const restaurantSessionId = session.metadata.session_id || "no-session";
   const totalPrice = (session.amount_total || 0) / 100;
 
- 
   const results = {
     saved: false,
-    kitchenNotified: false,
-    invoiceSent: false,
     errors: []
   };
 
-  // Process all steps with individual error handling
+  // Save to DB
   try {
     await saveOrderToDB({
-  customerName,
-  customerNumber,
-  orderItems,
-  orderType: session.metadata.order_type,
-  paymentMethod: "card",
-  notes: "",
-  address: "",
-  totalPrice, // ✅ ADD
-});
-
-
+      customerName,
+      customerNumber,
+      orderItems,
+      orderType: session.metadata.order_type,
+      paymentMethod: "card",
+      notes: "",
+      address: "",
+      totalPrice,
+    });
     console.log("✅ Order saved to DB");
     results.saved = true;
   } catch (err) {
     console.error("❌ Failed to save order to DB:", err.message);
     results.errors.push(`DB save failed: ${err.message}`);
-    // Continue processing even if DB save fails
-  }
-
- 
-
-  try {
-    await sendInvoiceToCustomer({ customerName, customerNumber, orderItems, totalPrice });
-    console.log("✅ Invoice sent to customer");
-    results.invoiceSent = true;
-  } catch (err) {
-    console.error("❌ Failed to send invoice:", err.message);
-    console.error("❌ Invoice error details:", err);
-    results.errors.push(`Invoice send failed: ${err.message}`);
-    // Continue processing even if invoice send fails
+    throw err; // Throw error if DB save fails
   }
 
   // Log final results
   console.log("📊 Processing results:", results);
-
-  // If all steps failed, throw an error
-  if (!results.saved && !results.kitchenNotified && !results.invoiceSent) {
-    throw new Error(`All processing steps failed: ${results.errors.join(", ")}`);
-  }
-
-  // If some steps failed, log warning but don't throw
-  if (results.errors.length > 0) {
-    console.warn("⚠️ Some steps failed but continuing:", results.errors);
-  }
 
   return { success: true, results };
 }
@@ -389,7 +224,7 @@ app.post("/verify-payment", async (req, res) => {
     console.log("🔍 Current processed status:", processed);
 
     // ✅ ALWAYS PROCESS: If not successfully processed yet, process it here
-    // This ensures invoice and kitchen notification ALWAYS happen after payment
+    // This ensures DB save ALWAYS happens after payment
     // We check only for "true" - if it's "processing" or "error", we'll retry
     if (processed !== "true") {
       console.log("⚠️ Order not processed yet (status: " + processed + "), processing now via verify-payment");
@@ -400,7 +235,7 @@ app.post("/verify-payment", async (req, res) => {
           metadata: { ...session.metadata, processed: "processing" },
         }).catch(err => console.warn("Warning: Could not update metadata:", err.message));
 
-        // Process the order (save DB, notify kitchen, send invoice)
+        // Process the order (save to DB)
         console.log("🚀 Starting order processing...");
         const processResult = await processOrder(session);
 
@@ -551,36 +386,33 @@ app.post("/cash-order", async (req, res) => {
       order_type,
       notes,
       address,
+      total_price,
+      session_id,
     } = req.body;
 
     if (!customer_name || !customer_number || !order_items?.length) {
       return res.status(400).json({ error: "Missing fields" });
     }
 
+    // Save to DB
     await saveOrderToDB({
-  customerName: customer_name,
-  customerNumber: customer_number,
-  orderItems: order_items,
-  orderType: order_type,
-  paymentMethod: "cash",
-  notes,
-  address,
-  totalPrice: req.body.total_price, // ✅ ADD
-});
-
-
-   
-    await sendInvoiceToCustomer({
       customerName: customer_name,
       customerNumber: customer_number,
       orderItems: order_items,
-      totalPrice: req.body.total_price,
+      orderType: order_type,
+      paymentMethod: "cash",
+      notes: notes || "",
+      address: address || "",
+      totalPrice: total_price || 0,
     });
+    console.log("✅ Cash order saved to DB");
+
+    // Kitchen notification removed - only save to DB
 
     return res.json({ success: true });
   } catch (err) {
     console.error("❌ Cash order failed:", err);
-    return res.status(500).json({ error: "Cash order failed" });
+    return res.status(500).json({ error: "Cash order failed", details: err.message });
   }
 });
 
