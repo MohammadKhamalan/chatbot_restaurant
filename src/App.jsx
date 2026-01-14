@@ -149,8 +149,9 @@ const AudioWaveform = ({ isListening }) => {
 
         updateWaveform();
       } catch (error) {
-        console.error("Error accessing microphone:", error);
+        console.error("Error accessing microphone for waveform:", error);
         // Fallback to random animation if microphone access fails
+        // Don't show error to user - waveform is just visual
         const interval = setInterval(() => {
           setHeights(Array.from({ length: barCount }, () => Math.random() * 80 + 20));
         }, 150);
@@ -385,6 +386,7 @@ const BACKEND_API = "http://localhost:4242"; // change if deployed
   const [webhookItems, setWebhookItems] = useState([]);
   const [isLoadingWebhook, setIsLoadingWebhook] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const [micPermissionStatus, setMicPermissionStatus] = useState(null); // 'granted', 'denied', 'prompt', null
   const [paymentMethod, setPaymentMethod] = useState(null); // "cash" | "card"
 const [orderType, setOrderType] = useState(null); // "delivery" | "pickup"
 const [address, setAddress] = useState("");
@@ -403,6 +405,27 @@ const [modalStep, setModalStep] = useState(null);
       localStorage.setItem(SESSION_KEY, sid);
     }
     setSessionId(sid);
+  }, []);
+
+  /* =======================
+     CHECK MICROPHONE PERMISSION ON MOUNT
+  ======================= */
+  useEffect(() => {
+    // Check microphone permission status on mount
+    const checkPermission = async () => {
+      if (!navigator.permissions || !navigator.permissions.query) {
+        return;
+      }
+      
+      try {
+        const result = await navigator.permissions.query({ name: 'microphone' });
+        setMicPermissionStatus(result.state);
+      } catch (error) {
+        console.error("Error checking microphone permission:", error);
+      }
+    };
+    
+    checkPermission();
   }, []);
 
   /* =======================
@@ -721,28 +744,101 @@ if (voiceOrder && voiceOrder.length > 0) {
     await callWebhook(text);
   };
 
+  // Check microphone permission status
+  const checkMicrophonePermissionStatus = async () => {
+    if (!navigator.permissions || !navigator.permissions.query) {
+      // Fallback for browsers that don't support permissions API
+      return null;
+    }
+    
+    try {
+      const result = await navigator.permissions.query({ name: 'microphone' });
+      setMicPermissionStatus(result.state);
+      return result.state;
+    } catch (error) {
+      console.error("Error checking microphone permission:", error);
+      return null;
+    }
+  };
+
+  // Check and request microphone permission explicitly
+  const checkMicrophonePermission = async () => {
+    try {
+      // Request permission explicitly using getUserMedia
+      // This ensures the permission prompt appears on mobile
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
+      });
+      
+      // Stop the stream immediately - we just needed permission
+      stream.getTracks().forEach(track => track.stop());
+      setMicPermissionStatus('granted');
+      return true;
+    } catch (error) {
+      console.error("Microphone permission error:", error);
+      
+      if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
+        setMicPermissionStatus('denied');
+        alert(
+          "Microphone permission is required for voice input.\n\n" +
+          "Please:\n" +
+          "1. Click 'Allow' when your browser asks for microphone permission\n" +
+          "2. Check your browser settings if the prompt doesn't appear\n" +
+          "3. Make sure no other apps are using the microphone\n" +
+          "4. Try refreshing the page and clicking the microphone again"
+        );
+        return false;
+      } else if (error.name === "NotFoundError" || error.name === "DevicesNotFoundError") {
+        alert("No microphone found. Please connect a microphone and try again.");
+        return false;
+      } else {
+        alert(`Microphone access error: ${error.message}. Please try again.`);
+        return false;
+      }
+    }
+  };
+
   const handleMicClick = async () => {
-  // 🔓 unlock audio on user gesture
-  if (!audioContext) {
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  if (audioContext.state === "suspended") {
-    await audioContext.resume();
-  }
+    // 🔓 unlock audio on user gesture
+    if (!audioContext) {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioContext.state === "suspended") {
+      await audioContext.resume();
+    }
 
-  if (isListening) {
-    setIsListening(false);
-    await stopVoiceCapture();
-    return;
-  }
+    if (isListening) {
+      setIsListening(false);
+      await stopVoiceCapture();
+      return;
+    }
 
-  setIsListening(true);
-  await startVoiceCapture(async (text) => {
-    await sendVoiceToWorkflow(text);
-    setIsListening(false);
-    await stopVoiceCapture();
-  });
-};
+    // On mobile, explicitly request permission first
+    // This ensures the permission prompt appears
+    const hasPermission = await checkMicrophonePermission();
+    if (!hasPermission) {
+      setIsListening(false);
+      return;
+    }
+
+    setIsListening(true);
+    
+    try {
+      await startVoiceCapture(async (text) => {
+        await sendVoiceToWorkflow(text);
+        setIsListening(false);
+        await stopVoiceCapture();
+      });
+    } catch (error) {
+      console.error("Failed to start voice capture:", error);
+      setIsListening(false);
+      // Error message already shown in startVoiceCapture
+    }
+  };
 
 
   /* =======================
