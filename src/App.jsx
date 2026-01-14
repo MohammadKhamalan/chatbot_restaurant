@@ -391,7 +391,11 @@ const BACKEND_API = "http://localhost:4242"; // change if deployed
 const [orderType, setOrderType] = useState(null); // "delivery" | "pickup"
 const [address, setAddress] = useState("");
 const [notes, setNotes] = useState("");
-const [modalStep, setModalStep] = useState(null); 
+const [modalStep, setModalStep] = useState(null);
+const [hasPlayedWelcome, setHasPlayedWelcome] = useState(false);
+const [itemNotes, setItemNotes] = useState({}); // Store notes for each item: { itemId: "notes text" }
+const [waitingForNotes, setWaitingForNotes] = useState(false); // Track if we're waiting for notes response
+const [conversationStarted, setConversationStarted] = useState(false); // Track if user started the conversation 
 // customer | method | delivery | notes
 
 
@@ -405,6 +409,9 @@ const [modalStep, setModalStep] = useState(null);
       localStorage.setItem(SESSION_KEY, sid);
     }
     setSessionId(sid);
+    
+    // Don't play welcome audio automatically - wait for user to click "ابدأ المحادثة"
+    // The audio will play when user clicks the start button
   }, []);
 
   /* =======================
@@ -557,7 +564,7 @@ const handleCashPayment = () => {
 };
 const handleCardPayment = async () => {
   if (!customerName || !customerPhone) {
-    alert("Enter name and phone");
+    alert("الرجاء إدخال الاسم والهاتف");
     return;
   }
 
@@ -583,7 +590,7 @@ const handleCardPayment = async () => {
     window.location.href = data.checkout_url; // Redirect to Stripe
   } catch (err) {
     console.error(err);
-    alert("Failed to start card payment");
+    alert("فشل بدء عملية الدفع بالبطاقة");
     setIsPaying(false);
   }
 };
@@ -610,15 +617,15 @@ const finalizeCashOrder = async () => {
 
     const data = await res.json();
     if (data.success) {
-      botReply("✅ Your order has been placed successfully!");
+      botReply("✅ تم تقديم طلبك بنجاح!");
       setModalStep(null);
       setOrder([]);
     } else {
-      botReply("❌ Something went wrong with your order, please try again.");
+      botReply("❌ حدث خطأ في طلبك، الرجاء المحاولة مرة أخرى.");
     }
   } catch (err) {
     console.error(err);
-    botReply("❌ Could not finalize your order, try again.");
+    botReply("❌ لم يتم إتمام طلبك، حاول مرة أخرى.");
   }
 };
 
@@ -691,32 +698,115 @@ const finalizeCashOrder = async () => {
       console.log("Audio field:", data?.audio);
       console.log("Items field:", data?.items);
 
-      // Play audio if available (play first, then show items)
-      // Check multiple possible locations for audio
-      const audioUrl = data?.audio || data?.output?.audio || data?.response?.audio;
-      if (audioUrl) {
-        console.log("🎵 Found audio URL:", audioUrl);
-        // Small delay to ensure UI is ready
-        setTimeout(() => {
-          playAudioFromUrl(audioUrl);
-        }, 100);
-      } else {
-        console.warn("⚠️ No audio found in response");
-      }
-
       // Handle items - check multiple possible locations
       const items = data?.items || data?.output?.items || data?.response?.items;
       // 🔥 Handle ORDER from voice
 const voiceOrder =
   data?.order || data?.output?.order || data?.response?.order;
 
+      // Check if we have items but no order - this means showing menu items
+      const hasItems = items && items.length > 0;
+      const hasOrder = voiceOrder && voiceOrder.length > 0;
+      
+      // IMPORTANT: Check if this is a notes response FIRST (before processing audio)
+      // If we're waiting for notes and transcript doesn't contain order keywords
+      const isNotesResponse = waitingForNotes && 
+                              transcript && 
+                              transcript.trim().length > 0 && 
+                              order.length > 0 && 
+                              !transcript.toLowerCase().includes("بدي") &&
+                              !transcript.toLowerCase().includes("اعطيني") &&
+                              !transcript.toLowerCase().includes("اطلب") &&
+                              !transcript.toLowerCase().includes("بدي أطلب");
+      
+      if (isNotesResponse) {
+        // This is a notes response - save notes silently, NO AUDIO
+        console.log("📝 Saving notes response:", transcript.trim());
+        const lastItem = order[order.length - 1];
+        if (lastItem) {
+          setItemNotes(prev => ({
+            ...prev,
+            [lastItem.id]: transcript.trim()
+          }));
+          
+          // Update order item with notes
+          setOrder(prev => prev.map((orderItem, index) => 
+            index === prev.length - 1 
+              ? { ...orderItem, notes: transcript.trim() }
+              : orderItem
+          ));
+        }
+        setWaitingForNotes(false);
+        setIsLoadingWebhook(false);
+        return; // Exit early - no audio, no further processing
+      }
+      
+      // Play audio if available (play first, then show items)
+      // Check multiple possible locations for audio
+      const audioUrl = data?.audio || data?.output?.audio || data?.response?.audio;
+      
+      // If showing items (menu) without order, always play welcome.mp3 (ignore audioUrl from n8n)
+      if (hasItems && !hasOrder) {
+        // If showing items (menu) without order, always play welcome.mp3 (ignore audioUrl from n8n)
+        console.log("🎵 Playing welcome voice for items display");
+        setTimeout(() => {
+          playAudioFromUrl("https://puwpdltpzxlbqphnhswz.supabase.co/storage/v1/object/public/Trio_voices/welcome.mp3");
+        }, 100);
+      } else if (audioUrl && !hasOrder) {
+        // Only play audioUrl if there's no order being added
+        // IMPORTANT: Don't play welcome_voice.mp3 from n8n - it should only play once at app start
+        if (audioUrl.includes('welcome_voice.mp3')) {
+          console.log("⏸️ Skipping welcome_voice.mp3 from n8n - already played at app start");
+        } else {
+          console.log("🎵 Found audio URL:", audioUrl);
+          setTimeout(() => {
+            playAudioFromUrl(audioUrl);
+          }, 100);
+        }
+      } else if (!hasOrder) {
+        console.warn("⚠️ No audio found in response");
+      }
+      // If hasOrder, don't play any audio here - it will be played in the order section below
+
 if (voiceOrder && voiceOrder.length > 0) {
   console.log("🛒 Found order from voice:", voiceOrder);
 
   const normalizedOrder = normalizeN8nOrder(voiceOrder);
+  
+  // Normal order addition (notes response already handled above)
+    // Normal order addition
+    const orderWithNotes = normalizedOrder.map(item => ({
+      ...item,
+      notes: itemNotes[item.id] || ""
+    }));
 
-  setOrder((prev) => [...prev, ...normalizedOrder]);
-}
+    setOrder((prev) => [...prev, ...orderWithNotes]);
+    
+    // Play ONLY "تم إضافة الصنف" audio, then item_notes.mp3 after 4 seconds
+    // Don't play any audio from n8n response when adding order
+    setWaitingForNotes(true);
+    
+    // Play added.mp3, then after 4 seconds play item_notes.mp3
+    const playAddConfirmationThenNotes = async () => {
+      // Play confirmation audio ONLY (ignore any audio from n8n)
+      try {
+        const addedAudio = new Audio("https://puwpdltpzxlbqphnhswz.supabase.co/storage/v1/object/public/Trio_voices/added.mp3");
+        addedAudio.crossOrigin = "anonymous";
+        await addedAudio.play();
+      } catch (err) {
+        console.error("Error playing added audio:", err);
+      }
+      
+      // After 4 seconds, play item_notes.mp3 (regardless of when added.mp3 finishes)
+      setTimeout(() => {
+        playAudioFromUrl("https://svrgtdigntwgepklbyav.supabase.co/storage/v1/object/public/nmar/item_notes.mp3");
+      }, 4000);
+    };
+    
+    setTimeout(() => {
+      playAddConfirmationThenNotes();
+    }, 500);
+  }
 
       if (items) {
         console.log("📦 Found items:", items);
@@ -734,7 +824,7 @@ if (voiceOrder && voiceOrder.length > 0) {
       }
     } catch (error) {
       console.error("Webhook error:", error);
-      botReply("Failed to connect to service, please try again.", false);
+      botReply("فشل الاتصال بالخدمة، الرجاء المحاولة مرة أخرى.", false);
     } finally {
       setIsLoadingWebhook(false);
     }
@@ -784,22 +874,31 @@ if (voiceOrder && voiceOrder.length > 0) {
       if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
         setMicPermissionStatus('denied');
         alert(
-          "Microphone permission is required for voice input.\n\n" +
-          "Please:\n" +
-          "1. Click 'Allow' when your browser asks for microphone permission\n" +
-          "2. Check your browser settings if the prompt doesn't appear\n" +
-          "3. Make sure no other apps are using the microphone\n" +
-          "4. Try refreshing the page and clicking the microphone again"
+          "إذن الميكروفون مطلوب لإدخال الصوت.\n\n" +
+          "الرجاء:\n" +
+          "1. اضغط 'السماح' عندما يطلب المتصفح إذن الميكروفون\n" +
+          "2. تحقق من إعدادات المتصفح إذا لم يظهر الطلب\n" +
+          "3. تأكد من عدم استخدام تطبيقات أخرى للميكروفون\n" +
+          "4. حاول تحديث الصفحة والضغط على الميكروفون مرة أخرى"
         );
         return false;
       } else if (error.name === "NotFoundError" || error.name === "DevicesNotFoundError") {
-        alert("No microphone found. Please connect a microphone and try again.");
+        alert("لم يتم العثور على ميكروفون. الرجاء توصيل ميكروفون والمحاولة مرة أخرى.");
         return false;
       } else {
-        alert(`Microphone access error: ${error.message}. Please try again.`);
+        alert(`خطأ في الوصول للميكروفون: ${error.message}. الرجاء المحاولة مرة أخرى.`);
         return false;
       }
     }
+  };
+
+  // Start conversation - play welcome audio and show microphone button
+  const handleStartConversation = async () => {
+    // Play welcome audio
+    await playAudioFromUrl("https://svrgtdigntwgepklbyav.supabase.co/storage/v1/object/public/nmar/welcome_voice.mp3");
+    // Mark conversation as started
+    setConversationStarted(true);
+    setHasPlayedWelcome(true);
   };
 
   const handleMicClick = async () => {
@@ -845,7 +944,36 @@ if (voiceOrder && voiceOrder.length > 0) {
      ORDER
   ======================= */
  const addToOrder = (item) => {
-  setOrder((o) => [...o, item]);
+  // Add item with notes field
+  const itemWithNotes = {
+    ...item,
+    notes: itemNotes[item.id] || ""
+  };
+  
+  setOrder((o) => [...o, itemWithNotes]);
+  
+  // Play "تم إضافة الصنف" audio first, then item_notes.mp3 after 4 seconds
+  setWaitingForNotes(true);
+  
+  const playAddConfirmationThenNotes = async () => {
+    // Play confirmation audio
+    try {
+      const addedAudio = new Audio("https://puwpdltpzxlbqphnhswz.supabase.co/storage/v1/object/public/Trio_voices/added.mp3");
+      addedAudio.crossOrigin = "anonymous";
+      await addedAudio.play();
+    } catch (err) {
+      console.error("Error playing added audio:", err);
+    }
+    
+    // After 4 seconds, play item_notes.mp3 (regardless of when added.mp3 finishes)
+    setTimeout(() => {
+      playAudioFromUrl("https://svrgtdigntwgepklbyav.supabase.co/storage/v1/object/public/nmar/item_notes.mp3");
+    }, 4000);
+  };
+  
+  setTimeout(() => {
+    playAddConfirmationThenNotes();
+  }, 500);
 };
 
 
@@ -863,23 +991,28 @@ if (voiceOrder && voiceOrder.length > 0) {
 
 const renderCustomerModal = () => (
   <>
-    <h2>Customer Information</h2>
+    <h2>معلومات العميل</h2>
 
     <input
-      placeholder="Name"
+      placeholder="الاسم"
       value={customerName}
       onChange={(e) => setCustomerName(e.target.value)}
     />
 
     <input
-      placeholder="Phone"
+      placeholder="الهاتف"
       value={customerPhone}
       onChange={(e) => setCustomerPhone(e.target.value)}
     />
 
-   <button className="cash-btn" onClick={() => finalizeOrder("cash")}>💵 Pay Cash</button>
-<button className="pay-btn" onClick={() => finalizeOrder("card")}>💳 Pay Card</button>
+   <button className="cash-btn" onClick={() => finalizeOrder("cash")}>💵 دفع نقدي</button>
+<button className="pay-btn" onClick={() => finalizeOrder("card")}>💳 دفع بالبطاقة</button>
 
+    <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+      <button className="cancel-btn" onClick={() => setModalStep(null)}>
+        إلغاء
+      </button>
+    </div>
   </>
 );
 
@@ -891,7 +1024,7 @@ const goBack = () => {
 
 const renderMethodModal = () => (
   <>
-    <h2>Order Type</h2>
+    <h2>نوع الطلب</h2>
 
     <button
       className="method-btn"
@@ -900,7 +1033,7 @@ const renderMethodModal = () => (
         setModalStep("delivery");
       }}
     >
-      🚚 Delivery
+      🚚 توصيل
     </button>
 
     <button
@@ -910,8 +1043,14 @@ const renderMethodModal = () => (
         setModalStep("notes");
       }}
     >
-      🏠 Take from Restaurant
+      🏠 استلام من المطعم
     </button>
+
+    <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+      <button className="cancel-btn" onClick={() => setModalStep(null)}>
+        إلغاء
+      </button>
+    </div>
   </>
 );
 
@@ -919,46 +1058,56 @@ const renderMethodModal = () => (
 
 const renderDeliveryModal = () => (
   <>
-    <h2>Delivery Details</h2>
+    <h2>تفاصيل التوصيل</h2>
 
     <input
-      placeholder="Delivery Address"
+      placeholder="عنوان التوصيل"
       value={address}
       onChange={(e) => setAddress(e.target.value)}
     />
 
     <textarea
-      placeholder="Notes (optional)"
+      placeholder="ملاحظات (اختياري)"
       value={notes}
       onChange={(e) => setNotes(e.target.value)}
     />
 
-    <button
-      className="confirm-btn"
-      onClick={() => setModalStep("customer")}
-    >
-      Continue
-    </button>
+    <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+      <button className="cancel-btn" onClick={() => setModalStep(null)}>
+        إلغاء
+      </button>
+      <button
+        className="confirm-btn"
+        onClick={() => setModalStep("customer")}
+      >
+        متابعة
+      </button>
+    </div>
   </>
 );
 
 
 const renderNotesModal = () => (
   <>
-    <h2>Order Notes</h2>
+    <h2>ملاحظات الطلب</h2>
 
     <textarea
-      placeholder="Notes (optional)"
+      placeholder="ملاحظات (اختياري)"
       value={notes}
       onChange={(e) => setNotes(e.target.value)}
     />
 
-    <button
-      className="confirm-btn"
-      onClick={() => setModalStep("customer")}
-    >
-      Continue
-    </button>
+    <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+      <button className="cancel-btn" onClick={() => setModalStep(null)}>
+        إلغاء
+      </button>
+      <button
+        className="confirm-btn"
+        onClick={() => setModalStep("customer")}
+      >
+        متابعة
+      </button>
+    </div>
   </>
 );
 
@@ -976,19 +1125,25 @@ const resetOrder = () => {
 
 const finalizeOrder = async (method) => {
   if (!customerName || !customerPhone) {
-    alert("Please enter name and phone");
+    alert("الرجاء إدخال الاسم والهاتف");
     return;
   }
+
+  // Prepare order items with notes
+  const orderItemsWithNotes = order.map(item => ({
+    ...item,
+    notes: item.notes || itemNotes[item.id] || ""
+  }));
 
   const payload = {
     customer_name: customerName,
     customer_number: customerPhone,
-    order_items: order,
+    order_items: orderItemsWithNotes,
     total_price: total,
     session_id: sessionId,
     order_type: orderType,
     address: orderType === "delivery" ? address : null,
-    notes,
+    notes, // General order notes
   };
 
   try {
@@ -1000,7 +1155,7 @@ const finalizeOrder = async (method) => {
         body: JSON.stringify(payload),
       });
 
-      alert("✅ Order placed. Pay cash on delivery.");
+      alert("✅ تم تقديم الطلب. الدفع نقداً عند التوصيل.");
       resetOrder();
       return;
     }
@@ -1019,7 +1174,7 @@ const finalizeOrder = async (method) => {
 
   } catch (err) {
     console.error(err);
-    alert("Failed to place order");
+    alert("فشل تقديم الطلب");
   }
 };
 
@@ -1038,7 +1193,7 @@ const finalizeOrder = async (method) => {
     </div>
   </div>
   <div className="navbar-right">
-    <span className="navbar-status">Online</span>
+    <span className="navbar-status">متصل</span>
   </div>
 </header>
 
@@ -1051,12 +1206,12 @@ const finalizeOrder = async (method) => {
                 {webhookItems.map((item) => (
                   <div key={item.id} className="searched-item-card">
                     <h3>{item.name}</h3>
-                    <p className="item-price">{item.price} SAR</p>
+                    <p className="item-price">{item.price} شيكل</p>
                     <button 
                       className="add-item-btn"
                       onClick={() => addToOrder(item)}
                     >
-                      <PlusIcon /> Add
+                      <PlusIcon /> إضافة
                     </button>
                   </div>
                 ))}
@@ -1066,63 +1221,103 @@ const finalizeOrder = async (method) => {
 
           {/* Voice Recording Section */}
           <div className="voice-center">
-            {/* Audio Waveform - Always visible */}
-            <AudioWaveform isListening={isListening} />
-            
-            {/* Microphone Icon */}
-            <button
-              className={`voice-circle ${isListening ? "listening" : ""}`}
-              onClick={handleMicClick}
-            >
-              {isListening ? <StopIcon /> : <MicIcon />}
-            </button>
-            
-            {/* Audio Playing Indicator */}
-            {isPlayingAudio && (
-              <div className="audio-indicator">
-                <span className="audio-wave"><SpeakerIcon /></span>
-                <span>Playing audio...</span>
-              </div>
+            {!conversationStarted ? (
+              /* Start Conversation Button - shown before conversation starts */
+              <button
+                className="start-conversation-btn"
+                onClick={handleStartConversation}
+              >
+                ابدأ المحادثة
+              </button>
+            ) : (
+              <>
+                {/* Audio Waveform - Always visible */}
+                <AudioWaveform isListening={isListening} />
+                
+                {/* Microphone Icon */}
+                <button
+                  className={`voice-circle ${isListening ? "listening" : ""}`}
+                  onClick={handleMicClick}
+                >
+                  {isListening ? <StopIcon /> : <MicIcon />}
+                </button>
+                
+                {/* Audio Playing Indicator */}
+                {isPlayingAudio && (
+                  <div className="audio-indicator">
+                    <span className="audio-wave"><SpeakerIcon /></span>
+                    <span>جاري تشغيل الصوت...</span>
+                  </div>
+                )}
+                
+                {/* Refresh Menu Button */}
+                <button
+                  className="webhook-btn refresh-menu-btn"
+                  onClick={() => callWebhook()}
+                  disabled={isLoadingWebhook || !sessionId}
+                >
+                  {isLoadingWebhook ? <><LoaderIcon /> 🤔 يفكرر...</> : <><RefreshIcon /> تحديث القائمة</>}
+                </button>
+              </>
             )}
-            
-            {/* Refresh Menu Button */}
-            <button
-              className="webhook-btn refresh-menu-btn"
-              onClick={() => callWebhook()}
-              disabled={isLoadingWebhook || !sessionId}
-            >
-              {isLoadingWebhook ? <><LoaderIcon /> Loading...</> : <><RefreshIcon /> Refresh Menu</>}
-            </button>
           </div>
         </div>
 
        <aside className="panel order-panel yellow-panel">
-  <h2><ReceiptIcon /> Your Order</h2>
+  <h2><ReceiptIcon /> طلبك</h2>
 
   {order.length === 0 ? (
-    <p className="empty-order">Order is empty</p>
+    <p className="empty-order">الطلب فارغ</p>
   ) : (
     <>
       <div className="order-items">
         {order.map((i, idx) => (
           <div key={idx} className="order-item">
-            <span>{i.name} — {i.price} SAR</span>
-<button
-  className="remove-item-btn"
-  onClick={() => removeFromOrder(idx)}
->
-  <DeleteIcon />
-</button>
+            <div style={{ flex: 1, width: '100%' }}>
+              <span>{i.name} — {i.price} شيكل</span>
+              <div style={{ marginTop: '6px' }}>
+                <input
+                  type="text"
+                  placeholder="ملاحظات (اختياري)"
+                  value={i.notes || itemNotes[i.id] || ""}
+                  onChange={(e) => {
+                    const notesValue = e.target.value;
+                    setItemNotes(prev => ({
+                      ...prev,
+                      [i.id]: notesValue
+                    }));
+                    // Update order item notes
+                    setOrder(prev => prev.map((item, index) => 
+                      index === idx ? { ...item, notes: notesValue } : item
+                    ));
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '4px 8px',
+                    fontSize: '11px',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px',
+                    marginTop: '4px'
+                  }}
+                />
+              </div>
+            </div>
+            <button
+              className="remove-item-btn"
+              onClick={() => removeFromOrder(idx)}
+            >
+              <DeleteIcon />
+            </button>
           </div>
         ))}
       </div>
 
       <div className="order-total">
-        <strong>Total: {total} SAR</strong>
+        <strong>المجموع: {total} شيكل</strong>
       </div>
 
      <button className="confirm" onClick={openModal}>
-  Confirm Order
+  تأكيد الطلب
 </button>
 
     </>

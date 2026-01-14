@@ -362,9 +362,33 @@ body {
   padding: 16px;
   gap: 20px;
   flex: 1;
-  justify-content: flex-start;
+  justify-content: center;
   padding-top: 20px;
   min-height: 0;
+}
+
+.start-conversation-btn {
+  padding: 16px 32px;
+  font-size: 18px;
+  font-weight: 600;
+  border-radius: 50px;
+  border: none;
+  background: linear-gradient(135deg, #3b1a7a, #5b21b6);
+  color: white;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(59, 26, 122, 0.4);
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.start-conversation-btn:hover {
+  background: linear-gradient(135deg, #4c2480, #6d28d9);
+  box-shadow: 0 10px 25px rgba(59, 26, 122, 0.5);
+  transform: translateY(-2px);
+}
+
+.start-conversation-btn:active {
+  transform: translateY(0) scale(0.98);
 }
 
 .voice-circle {
@@ -549,12 +573,27 @@ body {
   cursor: pointer;
 }
 .confirm-btn {
-  flex: 2;
-  background: #111;
+  flex: 1;
+  background: linear-gradient(135deg, #3b1a7a, #5b21b6);
   color: #fff;
   border: none;
-  padding: 12px;
-  border-radius: 8px;
+  padding: 12px 20px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease-out;
+  box-shadow: 0 4px 12px rgba(59, 26, 122, 0.3);
+}
+
+.confirm-btn:hover {
+  background: linear-gradient(135deg, #4c2480, #6d28d9);
+  box-shadow: 0 6px 16px rgba(59, 26, 122, 0.4);
+  transform: translateY(-2px);
+}
+
+.confirm-btn:active {
+  transform: translateY(0) scale(0.98);
 }
 .cash-btn {
   width: 100%;
@@ -964,6 +1003,11 @@ body {
     font-size: 26px;
   }
 
+  .start-conversation-btn {
+    padding: 14px 28px;
+    font-size: 16px;
+  }
+
   .audio-waveform {
     max-width: 280px;
     height: 50px;
@@ -1092,6 +1136,11 @@ body {
     width: 60px;
     height: 60px;
     font-size: 24px;
+  }
+
+  .start-conversation-btn {
+    padding: 12px 24px;
+    font-size: 15px;
   }
 
   .audio-waveform {
@@ -1242,28 +1291,28 @@ body {
 }
 
 .cancel-btn {
-  width: 100%;
-  padding: 10px;
-  background: linear-gradient(135deg, #3b1a7a, #5b21b6);
-  color: white;
-  border: none;
-  border-radius: 8px;
+  flex: 1;
+  padding: 12px 20px;
+  background: #f5f5f5;
+  color: #333;
+  border: 1px solid #ddd;
+  border-radius: 10px;
   font-size: 15px;
   font-weight: 600;
-  margin-top: 5px;
   cursor: pointer;
   transition: all 0.2s ease-out;
-  box-shadow: 0 2px 8px rgba(253, 224, 71, 0.4);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .cancel-btn:hover {
-  background: linear-gradient(135deg, #3b1a7a, #5b21b6);
-  box-shadow: 0 4px 12px rgba(253, 224, 71, 0.6);
-  transform: translateY(-1px);
+  background: #e5e5e5;
+  border-color: #bbb;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transform: translateY(-2px);
 }
 
 .cancel-btn:active {
-  transform: scale(0.98);
+  transform: translateY(0) scale(0.98);
 }
 
 /* ============================
@@ -1336,6 +1385,11 @@ body {
     width: 55px;
     height: 55px;
     font-size: 22px;
+  }
+
+  .start-conversation-btn {
+    padding: 10px 20px;
+    font-size: 14px;
   }
 
   .audio-waveform {

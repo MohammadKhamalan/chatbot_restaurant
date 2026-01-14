@@ -3,14 +3,14 @@ export async function startVoiceCapture(onFinalText, sessionId, sttLang = "ar-SA
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   if (!SpeechRecognition) {
-    const errorMsg = "Speech recognition not supported. Please use Chrome or Edge browser.";
+    const errorMsg = "التعرف على الصوت غير مدعوم. الرجاء استخدام متصفح Chrome أو Edge.";
     alert(errorMsg);
     throw new Error("SpeechRecognition not supported");
   }
 
   // Check if HTTPS (required for getUserMedia on mobile)
   if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    const errorMsg = "Microphone access requires HTTPS. Please use a secure connection.";
+    const errorMsg = "الوصول للميكروفون يتطلب HTTPS. الرجاء استخدام اتصال آمن.";
     alert(errorMsg);
     throw new Error("HTTPS required");
   }
@@ -46,7 +46,7 @@ export async function startVoiceCapture(onFinalText, sessionId, sttLang = "ar-SA
     switch (e.error) {
       case "not-allowed":
       case "permission-denied":
-        errorMessage = "Microphone permission denied. Please allow microphone access in your browser settings and try again.";
+        errorMessage = "تم رفض إذن الميكروفون. الرجاء السماح بالوصول للميكروفون في إعدادات المتصفح والمحاولة مرة أخرى.";
         break;
       case "no-speech":
         // This is normal, user didn't speak - don't show error
@@ -55,13 +55,13 @@ export async function startVoiceCapture(onFinalText, sessionId, sttLang = "ar-SA
         // User stopped - don't show error
         return;
       case "network":
-        errorMessage = "Network error. Please check your connection and try again.";
+        errorMessage = "خطأ في الشبكة. الرجاء التحقق من الاتصال والمحاولة مرة أخرى.";
         break;
       case "service-not-allowed":
-        errorMessage = "Speech recognition service not available. Please try again later.";
+        errorMessage = "خدمة التعرف على الصوت غير متاحة. الرجاء المحاولة لاحقاً.";
         break;
       default:
-        errorMessage = `Speech recognition error: ${e.error}. Please try again.`;
+        errorMessage = `خطأ في التعرف على الصوت: ${e.error}. الرجاء المحاولة مرة أخرى.`;
     }
     
     if (errorMessage) {
@@ -88,9 +88,9 @@ export async function startVoiceCapture(onFinalText, sessionId, sttLang = "ar-SA
     
     // If permission is denied, show helpful message
     if (error.name === "NotAllowedError" || error.message.includes("permission")) {
-      alert("Microphone permission is required. Please:\n1. Click the microphone icon again\n2. Allow microphone access when prompted\n3. Make sure no other apps are using the microphone");
+      alert("إذن الميكروفون مطلوب. الرجاء:\n1. اضغط على أيقونة الميكروفون مرة أخرى\n2. اسمح بالوصول للميكروفون عند الطلب\n3. تأكد من عدم استخدام تطبيقات أخرى للميكروفون");
     } else {
-      alert(`Failed to start voice recording: ${error.message}. Please try again.`);
+      alert(`فشل بدء تسجيل الصوت: ${error.message}. الرجاء المحاولة مرة أخرى.`);
     }
     throw error;
   }
