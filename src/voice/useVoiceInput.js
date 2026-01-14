@@ -9,7 +9,7 @@ export async function startVoiceCapture(onFinalText, sessionId, sttLang = "ar-SA
   }
 
   // Check if HTTPS (required for getUserMedia on mobile)
-  if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+  if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
     const errorMsg = "Microphone access requires HTTPS. Please use a secure connection.";
     alert(errorMsg);
     throw new Error("HTTPS required");
