@@ -19,7 +19,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 const WHATSAPP_FROM = "whatsapp:+1 864 351 6969";
 
-const N8N_SAVE_ORDER = "https://n8n.srv1004057.hstgr.cloud/webhook/save-order";
+const N8N_SAVE_ORDER = "https://n8n.srv1004057.hstgr.cloud/webhook/trio_orders";
 const N8N_KITCHEN_WEBHOOK = "https://n8n.srv1004057.hstgr.cloud/webhook/kitchen_order";
 const INVOICE_WEBHOOK_URL = "https://zuccess.app.n8n.cloud/webhook/send-invoice";
 const INVOICE_URL = "https://res.cloudinary.com/dfp9gwmpp/raw/upload/v1765975728/result_z3xpko.pdf";
@@ -37,42 +37,61 @@ function formatOrderItemsString(orderItems) {
     .map(([name, count]) => (count > 1 ? `${name} x${count}` : name))
     .join(", ");
 }
+function formatOrdersText(orderItems) {
+  const counts = {};
 
-function formatKitchenText({ customerName, customerNumber, sessionId, orderItems, totalPrice }) {
-  const itemsText = orderItems.map((i) => `- ${i.name} — ${i.price} SAR`).join("\n");
-  return `
-New Order Received 🍽️
+  for (const item of orderItems) {
+    const name = String(item?.name || "").trim();
+    if (!name) continue;
+    counts[name] = (counts[name] || 0) + 1;
+  }
 
-👤 Customer: ${customerName}
-📞 Phone: ${customerNumber}
-🧾 Session ID: ${sessionId}
-
-🛒 Items:
-${itemsText}
-
-💰 Total: ${totalPrice} SAR
-
-Sent from Zuccess Restaurant AI Assistant 🤖
-  `.trim();
+  return Object.entries(counts)
+    .map(([name, qty]) => (qty > 1 ? `${name} x${qty}` : name))
+    .join(", ");
 }
 
-async function saveOrderToDB({ customerName, customerNumber, totalPrice, orderItems, sessionId }) {
+
+
+
+async function saveOrderToDB({
+  customerName,
+  customerNumber,
+  orderItems,
+  orderType,
+  paymentMethod,
+  notes,
+  address,
+  totalPrice, // ✅ NEW
+}) {
+  console.log("💾 Saving order to DB");
+
+  const payload = {
+    Name: customerName,
+    phone_number: customerNumber,
+    Status: orderType === "delivery" ? "delivery" : "on site",
+    payment_method: paymentMethod,
+    total_price: totalPrice,                 // ✅ NEW
+    Notes: notes || "",
+    address: orderType === "delivery" ? address || "" : "",
+    orders: formatOrdersText(orderItems),    // ✅ TEXT ONLY
+    created_at: new Date().toISOString(),
+  };
+
   const r = await fetch(N8N_SAVE_ORDER, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      customer_name: customerName,
-      customer_number: customerNumber,
-      total_price: totalPrice,
-      order_items: orderItems,
-      session_id: sessionId,
-    }),
+    body: JSON.stringify(payload),
   });
 
-  const t = await r.text();
-  if (!r.ok) throw new Error(`save-order failed: ${r.status} ${t}`);
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`save-order failed: ${r.status} ${t}`);
+  }
+
   return true;
 }
+
 
 async function notifyKitchen({ customerName, customerNumber, totalPrice, orderItems, sessionId, orderText }) {
   console.log("📤 Sending to kitchen webhook:", N8N_KITCHEN_WEBHOOK);
@@ -201,7 +220,12 @@ async function sendInvoiceToCustomer({ customerName, customerNumber, orderItems,
 // ======== CREATE CHECKOUT SESSION ========
 app.post("/create-checkout-session", async (req, res) => {
   try {
-    const { customer_name, customer_number, order_items, total_price, session_id } = req.body;
+    const {  customer_name,
+  customer_number,
+  order_items,
+  total_price,
+  session_id,
+  order_type, } = req.body;
 
     if (!customer_name || !customer_number || !Array.isArray(order_items) || order_items.length === 0) {
       return res.status(400).json({ error: "Missing required fields" });
@@ -236,13 +260,16 @@ app.post("/create-checkout-session", async (req, res) => {
           quantity: 1,
         },
       ],
-      metadata: {
-        customer_name,
-        customer_number,
-        session_id,
-        order: orderMetadata,
-        processed: "false", // ✅ idempotency flag
-      },
+     metadata: {
+  customer_name,
+  customer_number,
+  session_id,
+  order_type,          // ✅ IMPORTANT
+  payment_method: "card",
+  order: orderMetadata,
+  processed: "false",
+},
+
       success_url: `${FRONTEND_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${FRONTEND_URL}/payment-cancel`,
     });
@@ -274,17 +301,7 @@ async function processOrder(session) {
   const restaurantSessionId = session.metadata.session_id || "no-session";
   const totalPrice = (session.amount_total || 0) / 100;
 
-  const orderText = formatKitchenText({
-    customerName,
-    customerNumber,
-    sessionId: restaurantSessionId,
-    orderItems,
-    totalPrice,
-  });
-
-  console.log("📦 Processing order for:", customerName, customerNumber);
-  console.log("📦 Order details:", { customerName, customerNumber, totalPrice, itemCount: orderItems.length });
-
+ 
   const results = {
     saved: false,
     kitchenNotified: false,
@@ -294,7 +311,18 @@ async function processOrder(session) {
 
   // Process all steps with individual error handling
   try {
-    await saveOrderToDB({ customerName, customerNumber, totalPrice, orderItems, sessionId: restaurantSessionId });
+    await saveOrderToDB({
+  customerName,
+  customerNumber,
+  orderItems,
+  orderType: session.metadata.order_type,
+  paymentMethod: "card",
+  notes: "",
+  address: "",
+  totalPrice, // ✅ ADD
+});
+
+
     console.log("✅ Order saved to DB");
     results.saved = true;
   } catch (err) {
@@ -303,16 +331,7 @@ async function processOrder(session) {
     // Continue processing even if DB save fails
   }
 
-  try {
-    await notifyKitchen({ customerName, customerNumber, totalPrice, orderItems, sessionId: restaurantSessionId, orderText });
-    console.log("✅ Kitchen notified");
-    results.kitchenNotified = true;
-  } catch (err) {
-    console.error("❌ Failed to notify kitchen:", err.message);
-    console.error("❌ Kitchen error details:", err);
-    results.errors.push(`Kitchen notification failed: ${err.message}`);
-    // Continue processing even if kitchen notification fails
-  }
+ 
 
   try {
     await sendInvoiceToCustomer({ customerName, customerNumber, orderItems, totalPrice });
@@ -523,6 +542,48 @@ app.post("/stripe-webhook", async (req, res) => {
 app.get("/", (req, res) => {
   res.json({ ok: true, name: "Zuccess Backend", port: process.env.PORT || 4242 });
 });
+app.post("/cash-order", async (req, res) => {
+  try {
+    const {
+      customer_name,
+      customer_number,
+      order_items,
+      order_type,
+      notes,
+      address,
+    } = req.body;
+
+    if (!customer_name || !customer_number || !order_items?.length) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
+
+    await saveOrderToDB({
+  customerName: customer_name,
+  customerNumber: customer_number,
+  orderItems: order_items,
+  orderType: order_type,
+  paymentMethod: "cash",
+  notes,
+  address,
+  totalPrice: req.body.total_price, // ✅ ADD
+});
+
+
+   
+    await sendInvoiceToCustomer({
+      customerName: customer_name,
+      customerNumber: customer_number,
+      orderItems: order_items,
+      totalPrice: req.body.total_price,
+    });
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("❌ Cash order failed:", err);
+    return res.status(500).json({ error: "Cash order failed" });
+  }
+});
+
 
 const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => console.log(`🚀 Backend running on http://localhost:${PORT}`));
