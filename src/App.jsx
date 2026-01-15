@@ -392,7 +392,6 @@ console.log("🔧 REACT_APP_BACKEND_API:", process.env.REACT_APP_BACKEND_API);
   const [webhookItems, setWebhookItems] = useState([]);
   const [isLoadingWebhook, setIsLoadingWebhook] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
-  const [micPermissionStatus, setMicPermissionStatus] = useState(null); // 'granted', 'denied', 'prompt', null
   const [paymentMethod, setPaymentMethod] = useState(null); // "cash" | "card"
 const [orderType, setOrderType] = useState(null); // "delivery" | "pickup"
 const [address, setAddress] = useState("");
@@ -420,26 +419,6 @@ const [conversationStarted, setConversationStarted] = useState(false); // Track 
     // The audio will play when user clicks the start button
   }, []);
 
-  /* =======================
-     CHECK MICROPHONE PERMISSION ON MOUNT
-  ======================= */
-  useEffect(() => {
-    // Check microphone permission status on mount
-    const checkPermission = async () => {
-      if (!navigator.permissions || !navigator.permissions.query) {
-        return;
-      }
-      
-      try {
-        const result = await navigator.permissions.query({ name: 'microphone' });
-        setMicPermissionStatus(result.state);
-      } catch (error) {
-        console.error("Error checking microphone permission:", error);
-      }
-    };
-    
-    checkPermission();
-  }, []);
 
   /* =======================
      AUDIO CLEANUP
@@ -615,10 +594,10 @@ const finalizeCashOrder = async () => {
   };
 
   try {
-    console.log("💳 Sending verify-payment to:", `${BACKEND_API}/verify-payment`);
-    console.log("💳 Payload:", payload);
+    console.log("💰 Sending cash order to:", `${BACKEND_API}/cash-order`);
+    console.log("💰 Payload:", payload);
     
-    const res = await fetch(`${BACKEND_API}/verify-payment`, {
+    const res = await fetch(`${BACKEND_API}/cash-order`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -789,7 +768,7 @@ const voiceOrder =
         console.log("🎵 Playing welcome voice for items display");
         setTimeout(() => {
           playAudioFromUrl("https://puwpdltpzxlbqphnhswz.supabase.co/storage/v1/object/public/Trio_voices/welcome.mp3");
-        }, 100);
+        }, 300);
       } else if (audioUrl && !hasOrder) {
         // Only play audioUrl if there's no order being added
         // IMPORTANT: Don't play welcome_voice.mp3 from n8n - it should only play once at app start
@@ -799,7 +778,7 @@ const voiceOrder =
           console.log("🎵 Found audio URL:", audioUrl);
           setTimeout(() => {
             playAudioFromUrl(audioUrl);
-          }, 100);
+          }, 300);
         }
       } else if (!hasOrder) {
         console.warn("⚠️ No audio found in response");
@@ -872,82 +851,36 @@ if (voiceOrder && voiceOrder.length > 0) {
       setIsLoadingWebhook(false);
     }
   };
+const sendVoiceToWorkflow = (text) => {
+  if (!text?.trim()) return;
 
-  const sendVoiceToWorkflow = async (text) => {
-    if (!text || !text.trim()) {
-      console.warn("⚠️ Empty text in sendVoiceToWorkflow");
-      return;
-    }
+  console.log("📤 Sending voice to webhook:", text);
+
+  callWebhook(text).catch((err) => {
+    console.error("❌ Webhook failed:", err);
+    botReply("فشل الاتصال بالخدمة", false);
+  });
+};
+
+  // const sendVoiceToWorkflow = async (text) => {
+  //   if (!text || !text.trim()) {
+  //     console.warn("⚠️ Empty text in sendVoiceToWorkflow");
+  //     return;
+  //   }
     
-    console.log("📤 Sending voice text to workflow:", text);
-    // Set loading state before calling webhook
-    setIsLoadingWebhook(true);
-    try {
-      await callWebhook(text);
-    } catch (error) {
-      console.error("❌ Error in sendVoiceToWorkflow:", error);
-      setIsLoadingWebhook(false);
-      botReply("حدث خطأ أثناء معالجة الرسالة، الرجاء المحاولة مرة أخرى.", false);
-    }
-  };
+  //   console.log("📤 Sending voice text to workflow:", text);
+  //   // Set loading state before calling webhook
+  //   setIsLoadingWebhook(true);
+  //   try {
+  //     await callWebhook(text);
+  //   } catch (error) {
+  //     console.error("❌ Error in sendVoiceToWorkflow:", error);
+  //     setIsLoadingWebhook(false);
+  //     botReply("حدث خطأ أثناء معالجة الرسالة، الرجاء المحاولة مرة أخرى.", false);
+  //   }
+  // };
 
   // Check microphone permission status
-  const checkMicrophonePermissionStatus = async () => {
-    if (!navigator.permissions || !navigator.permissions.query) {
-      // Fallback for browsers that don't support permissions API
-      return null;
-    }
-    
-    try {
-      const result = await navigator.permissions.query({ name: 'microphone' });
-      setMicPermissionStatus(result.state);
-      return result.state;
-    } catch (error) {
-      console.error("Error checking microphone permission:", error);
-      return null;
-    }
-  };
-
-  // Check and request microphone permission explicitly
-  const checkMicrophonePermission = async () => {
-    try {
-      // Request permission explicitly using getUserMedia
-      // This ensures the permission prompt appears on mobile
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        } 
-      });
-      
-      // Stop the stream immediately - we just needed permission
-      stream.getTracks().forEach(track => track.stop());
-      setMicPermissionStatus('granted');
-      return true;
-    } catch (error) {
-      console.error("Microphone permission error:", error);
-      
-      if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
-        setMicPermissionStatus('denied');
-        alert(
-          "إذن الميكروفون مطلوب لإدخال الصوت.\n\n" +
-          "الرجاء:\n" +
-          "1. اضغط 'السماح' عندما يطلب المتصفح إذن الميكروفون\n" +
-          "2. تحقق من إعدادات المتصفح إذا لم يظهر الطلب\n" +
-          "3. تأكد من عدم استخدام تطبيقات أخرى للميكروفون\n" +
-          "4. حاول تحديث الصفحة والضغط على الميكروفون مرة أخرى"
-        );
-        return false;
-      } else if (error.name === "NotFoundError" || error.name === "DevicesNotFoundError") {
-        alert("لم يتم العثور على ميكروفون. الرجاء توصيل ميكروفون والمحاولة مرة أخرى.");
-        return false;
-      } else {
-        alert(`خطأ في الوصول للميكروفون: ${error.message}. الرجاء المحاولة مرة أخرى.`);
-        return false;
-      }
-    }
-  };
 
   // Start conversation - play welcome audio and show microphone button
   const handleStartConversation = async () => {
@@ -957,65 +890,109 @@ if (voiceOrder && voiceOrder.length > 0) {
     setConversationStarted(true);
     setHasPlayedWelcome(true);
   };
+const handleMicClick = async () => {
+  // 🔓 unlock audio (required on mobile)
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioContext.state === "suspended") {
+    await audioContext.resume();
+  }
 
-  const handleMicClick = async () => {
-    // 🔓 unlock audio on user gesture
-    if (!audioContext) {
-      audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    if (audioContext.state === "suspended") {
-      await audioContext.resume();
-    }
+  if (isListening) {
+    setIsListening(false);
+    stopVoiceCapture();
+    return;
+  }
 
-    if (isListening) {
-      setIsListening(false);
-      await stopVoiceCapture();
-      return;
-    }
+  // ✅ ONLY reliable permission check
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    stream.getTracks().forEach((t) => t.stop());
+  } catch (e) {
+    console.error("❌ getUserMedia failed:", e);
+    alert("الرجاء السماح باستخدام الميكروفون");
+    return;
+  }
 
-    // On mobile, explicitly request permission first
-    // This ensures the permission prompt appears
-    const hasPermission = await checkMicrophonePermission();
-    if (!hasPermission) {
-      setIsListening(false);
-      return;
-    }
+  console.log("🎤 Start voice capture (mobile safe)");
+  setIsListening(true);
 
-    console.log("🎤 Starting voice capture...");
-    console.log("🎤 User Agent:", navigator.userAgent);
-    console.log("🎤 Protocol:", window.location.protocol);
-    console.log("🎤 Hostname:", window.location.hostname);
-    console.log("🎤 Is Mobile:", /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent));
+  // IMPORTANT: startVoiceCapture callback MUST NOT be async
+  startVoiceCapture((text) => {
+    console.log("🎤 Final voice text:", text);
+    if (text?.trim()) {
+      // 🔥 call webhook immediately (no await)
+      sendVoiceToWorkflow(text);
+    } else {
+      botReply("لم يتم التعرف على الصوت", false);
+    }
+    // cleanup AFTER
+    setIsListening(false);
+    stopVoiceCapture();
+  });
+};
+
+  // const handleMicClick = async () => {
+  //   // 🔓 unlock audio on user gesture
+  //   if (!audioContext) {
+  //     audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  //   }
+  //   if (audioContext.state === "suspended") {
+  //     await audioContext.resume();
+  //   }
+
+  //   if (isListening) {
+  //     setIsListening(false);
+  //     await stopVoiceCapture();
+  //     return;
+  //   }
+
+  //   // On mobile, explicitly request permission first
+  //   // This ensures the permission prompt appears
+  //   const hasPermission = await checkMicrophonePermission();
+  //   if (!hasPermission) {
+  //     setIsListening(false);
+  //     return;
+  //   }
+
+  //   console.log("🎤 Starting voice capture...");
+  //   console.log("🎤 User Agent:", navigator.userAgent);
+  //   console.log("🎤 Protocol:", window.location.protocol);
+  //   console.log("🎤 Hostname:", window.location.hostname);
+  //   console.log("🎤 Is Mobile:", /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent));
     
-    setIsListening(true);
+  //   setIsListening(true);
     
-    try {
-      await startVoiceCapture(async (text) => {
-        console.log("🎤 Voice text received:", text);
-        console.log("🎤 Text length:", text ? text.length : 0);
-        if (text && text.trim().length > 0) {
-          await sendVoiceToWorkflow(text);
-        } else {
-          console.warn("⚠️ Empty text received from voice capture");
-          botReply("لم يتم التعرف على الصوت، الرجاء المحاولة مرة أخرى.", false);
-        }
-        setIsListening(false);
-        await stopVoiceCapture();
-      });
-    } catch (error) {
-      console.error("❌ Failed to start voice capture:", error);
-      console.error("❌ Error name:", error.name);
-      console.error("❌ Error message:", error.message);
-      console.error("❌ Error stack:", error.stack);
-      setIsListening(false);
-      // Error message already shown in startVoiceCapture
-      // On mobile, sometimes we need to retry
-      if (error.message && error.message.includes("permission")) {
-        // Permission issue - user needs to grant access
-        console.log("🔒 Permission issue detected, user needs to grant access");
-      }
-    }
-  };
+  //   try {
+  //     await startVoiceCapture(async (text) => {
+  //       console.log("🎤 Voice text received:", text);
+  //       console.log("🎤 Text length:", text ? text.length : 0);
+  //       if (text && text.trim().length > 0) {
+  //         await sendVoiceToWorkflow(text);
+  //       } else {
+  //         console.warn("⚠️ Empty text received from voice capture");
+  //         botReply("لم يتم التعرف على الصوت، الرجاء المحاولة مرة أخرى.", false);
+  //       }
+  //       setIsListening(false);
+  //       await stopVoiceCapture();
+  //     });
+  //   } catch (error) {
+  //     console.error("❌ Failed to start voice capture:", error);
+  //     console.error("❌ Error name:", error.name);
+  //     console.error("❌ Error message:", error.message);
+  //     console.error("❌ Error stack:", error.stack);
+  //     setIsListening(false);
+  //     // Error message already shown in startVoiceCapture
+  //     // On mobile, sometimes we need to retry
+  //     if (error.message && error.message.includes("permission")) {
+  //       // Permission issue - user needs to grant access
+  //       console.log("🔒 Permission issue detected, user needs to grant access");
+  //     }
+  //   }
+  // };
 
 
   /* =======================
