@@ -379,6 +379,11 @@ const [isPaying, setIsPaying] = useState(false);
 // Use environment variable for production, fallback to localhost for development
 const BACKEND_API = process.env.REACT_APP_BACKEND_API || "http://localhost:4242";
 
+// Debug: Log backend API URL (helpful for mobile debugging)
+console.log("🔧 Backend API URL:", BACKEND_API);
+console.log("🔧 Environment:", process.env.NODE_ENV);
+console.log("🔧 REACT_APP_BACKEND_API:", process.env.REACT_APP_BACKEND_API);
+
   const [menuState, setMenuState] = useState(INITIAL_MENU);
   const [currentCategory, setCurrentCategory] = useState(null);
   const [order, setOrder] = useState([]);
@@ -687,38 +692,61 @@ const finalizeCashOrder = async () => {
 
   const callWebhook = async (transcript = "") => {
     if (!sessionId) {
-      console.error("No session ID available");
+      console.error("❌ No session ID available");
       return;
     }
     
-    console.log("🔵 Starting webhook call with transcript:", transcript);
+    console.log("🔵 ========== WEBHOOK CALL START ==========");
+    console.log("🔵 Transcript:", transcript);
+    console.log("🔵 Session ID:", sessionId);
+    console.log("🔵 Webhook URL:", N8N_VOICE_WEBHOOK);
+    console.log("🔵 User Agent:", navigator.userAgent);
+    console.log("🔵 Protocol:", window.location.protocol);
+    console.log("🔵 Hostname:", window.location.hostname);
+    console.log("🔵 Is Mobile:", /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent));
+    
     setIsLoadingWebhook(true);
     
     // Detect category from transcript
     const detectedCategory = detectCategoryFromText(transcript);
-    console.log("Detected category from transcript:", detectedCategory, transcript);
+    console.log("🔵 Detected category:", detectedCategory);
     
     try {
+      const requestBody = { session_id: sessionId, transcript };
+      console.log("🔵 Request body:", JSON.stringify(requestBody));
+      
       const r = await fetch(N8N_VOICE_WEBHOOK, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, transcript }),
+        body: JSON.stringify(requestBody),
       });
+      
+      console.log("🔵 Response status:", r.status, r.statusText);
+      console.log("🔵 Response headers:", Object.fromEntries(r.headers.entries()));
 
       if (!r.ok) {
-        throw new Error(`HTTP error! status: ${r.status}`);
+        const errorText = await r.text().catch(() => "Unknown error");
+        console.error("❌ HTTP error:", r.status, r.statusText);
+        console.error("❌ Error response:", errorText);
+        throw new Error(`HTTP error! status: ${r.status} - ${errorText}`);
       }
 
-      const raw = await r.json();
+      const raw = await r.json().catch(async (err) => {
+        const text = await r.text().catch(() => "Could not read response");
+        console.error("❌ Failed to parse JSON response:", err);
+        console.error("❌ Response text:", text);
+        throw new Error(`Invalid JSON response: ${text}`);
+      });
 
       // 🔥 n8n returns ARRAY or object
       const data = Array.isArray(raw) ? raw[0] : raw;
 
-      console.log("✅ WEBHOOK RESPONSE RECEIVED");
-      console.log("WEBHOOK DATA:", data);
-      console.log("Audio field:", data?.audio);
-      console.log("Items field:", data?.items);
-      console.log("Order field:", data?.order);
+      console.log("✅ ========== WEBHOOK RESPONSE RECEIVED ==========");
+      console.log("✅ Response type:", Array.isArray(raw) ? "Array" : "Object");
+      console.log("✅ WEBHOOK DATA:", JSON.stringify(data, null, 2));
+      console.log("✅ Audio field:", data?.audio);
+      console.log("✅ Items field:", data?.items);
+      console.log("✅ Order field:", data?.order);
 
       // Handle items - check multiple possible locations
       const items = data?.items || data?.output?.items || data?.response?.items;
@@ -742,24 +770,12 @@ const voiceOrder =
                               !transcript.toLowerCase().includes("بدي أطلب");
       
       if (isNotesResponse) {
-        // This is a notes response - save notes silently, NO AUDIO
-        console.log("📝 Saving notes response:", transcript.trim());
-        const lastItem = order[order.length - 1];
-        if (lastItem) {
-          setItemNotes(prev => ({
-            ...prev,
-            [lastItem.id]: transcript.trim()
-          }));
-          
-          // Update order item with notes
-          setOrder(prev => prev.map((orderItem, index) => 
-            index === prev.length - 1 
-              ? { ...orderItem, notes: transcript.trim() }
-              : orderItem
-          ));
-        }
+        // Notes response - save as general order notes
+        console.log("📝 Saving notes response as general order notes:", transcript.trim());
+        setNotes(transcript.trim()); // Save voice notes to general order notes
         setWaitingForNotes(false);
         setIsLoadingWebhook(false);
+        botReply(`تم حفظ الملاحظات: ${transcript.trim()}`, false); // Confirm without speaking
         return; // Exit early - no audio, no further processing
       }
       
@@ -795,14 +811,8 @@ if (voiceOrder && voiceOrder.length > 0) {
 
   const normalizedOrder = normalizeN8nOrder(voiceOrder);
   
-  // Normal order addition (notes response already handled above)
-    // Normal order addition
-    const orderWithNotes = normalizedOrder.map(item => ({
-      ...item,
-      notes: itemNotes[item.id] || ""
-    }));
-
-    setOrder((prev) => [...prev, ...orderWithNotes]);
+  // Normal order addition (no individual item notes)
+    setOrder((prev) => [...prev, ...normalizedOrder]);
     
     // Play ONLY "تم إضافة الصنف" audio, then item_notes.mp3 after 4 seconds
     // Don't play any audio from n8n response when adding order
@@ -971,21 +981,32 @@ if (voiceOrder && voiceOrder.length > 0) {
       return;
     }
 
+    console.log("🎤 Starting voice capture...");
+    console.log("🎤 User Agent:", navigator.userAgent);
+    console.log("🎤 Protocol:", window.location.protocol);
+    console.log("🎤 Hostname:", window.location.hostname);
+    console.log("🎤 Is Mobile:", /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent));
+    
     setIsListening(true);
     
     try {
       await startVoiceCapture(async (text) => {
         console.log("🎤 Voice text received:", text);
+        console.log("🎤 Text length:", text ? text.length : 0);
         if (text && text.trim().length > 0) {
           await sendVoiceToWorkflow(text);
         } else {
           console.warn("⚠️ Empty text received from voice capture");
+          botReply("لم يتم التعرف على الصوت، الرجاء المحاولة مرة أخرى.", false);
         }
         setIsListening(false);
         await stopVoiceCapture();
       });
     } catch (error) {
       console.error("❌ Failed to start voice capture:", error);
+      console.error("❌ Error name:", error.name);
+      console.error("❌ Error message:", error.message);
+      console.error("❌ Error stack:", error.stack);
       setIsListening(false);
       // Error message already shown in startVoiceCapture
       // On mobile, sometimes we need to retry
@@ -1001,13 +1022,8 @@ if (voiceOrder && voiceOrder.length > 0) {
      ORDER
   ======================= */
  const addToOrder = (item) => {
-  // Add item with notes field
-  const itemWithNotes = {
-    ...item,
-    notes: itemNotes[item.id] || ""
-  };
-  
-  setOrder((o) => [...o, itemWithNotes]);
+  // Add item without notes field
+  setOrder((o) => [...o, item]);
   
   // Play "تم إضافة الصنف" audio first, then item_notes.mp3 after 4 seconds
   setWaitingForNotes(true);
@@ -1187,9 +1203,11 @@ const finalizeOrder = async (method) => {
   }
 
   // Prepare order items with notes
+  // Prepare order items (no individual item notes)
   const orderItemsWithNotes = order.map(item => ({
-    ...item,
-    notes: item.notes || itemNotes[item.id] || ""
+    id: item.id,
+    name: item.name,
+    price: item.price
   }));
 
   const payload = {
@@ -1366,32 +1384,6 @@ const finalizeOrder = async (method) => {
           <div key={idx} className="order-item">
             <div style={{ flex: 1, width: '100%' }}>
               <span>{i.name} — {i.price} شيكل</span>
-              <div style={{ marginTop: '6px' }}>
-                <input
-                  type="text"
-                  placeholder="ملاحظات (اختياري)"
-                  value={i.notes || itemNotes[i.id] || ""}
-                  onChange={(e) => {
-                    const notesValue = e.target.value;
-                    setItemNotes(prev => ({
-                      ...prev,
-                      [i.id]: notesValue
-                    }));
-                    // Update order item notes
-                    setOrder(prev => prev.map((item, index) => 
-                      index === idx ? { ...item, notes: notesValue } : item
-                    ));
-                  }}
-                  style={{
-                    width: '100%',
-                    padding: '4px 8px',
-                    fontSize: '11px',
-                    border: '1px solid #ddd',
-                    borderRadius: '4px',
-                    marginTop: '4px'
-                  }}
-                />
-              </div>
             </div>
             <button
               className="remove-item-btn"

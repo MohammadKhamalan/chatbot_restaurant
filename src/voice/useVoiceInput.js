@@ -57,20 +57,29 @@ export async function startVoiceCapture(onFinalText, sessionId, sttLang = "ar-SA
   };
 
   recognition.onerror = (e) => {
-    console.error("Speech recognition error:", e.error);
+    console.error("❌ Speech recognition error:", e.error);
+    console.error("❌ Error details:", {
+      error: e.error,
+      message: e.message,
+      userAgent: navigator.userAgent,
+      protocol: window.location.protocol,
+      hostname: window.location.hostname,
+    });
     
     // Handle specific error cases
     let errorMessage = "";
     switch (e.error) {
       case "not-allowed":
       case "permission-denied":
-        errorMessage = "تم رفض إذن الميكروفون. الرجاء السماح بالوصول للميكروفون في إعدادات المتصفح والمحاولة مرة أخرى.";
+        errorMessage = "تم رفض إذن الميكروفون. الرجاء:\n1. السماح بالوصول للميكروفون في إعدادات المتصفح\n2. إغلاق أي تطبيقات أخرى تستخدم الميكروفون\n3. المحاولة مرة أخرى";
         break;
       case "no-speech":
         // This is normal, user didn't speak - don't show error
+        console.log("ℹ️ No speech detected (normal)");
         return;
       case "aborted":
         // User stopped - don't show error
+        console.log("ℹ️ Speech recognition aborted (normal)");
         return;
       case "network":
         errorMessage = "خطأ في الشبكة. الرجاء التحقق من الاتصال والمحاولة مرة أخرى.";
@@ -78,13 +87,16 @@ export async function startVoiceCapture(onFinalText, sessionId, sttLang = "ar-SA
       case "service-not-allowed":
         errorMessage = "خدمة التعرف على الصوت غير متاحة. الرجاء المحاولة لاحقاً.";
         break;
+      case "audio-capture":
+        errorMessage = "لم يتم العثور على ميكروفون. الرجاء التحقق من إعدادات الجهاز.";
+        break;
       default:
         errorMessage = `خطأ في التعرف على الصوت: ${e.error}. الرجاء المحاولة مرة أخرى.`;
     }
     
     if (errorMessage) {
       // Only show error for critical issues
-      if (e.error === "not-allowed" || e.error === "permission-denied") {
+      if (e.error === "not-allowed" || e.error === "permission-denied" || e.error === "network" || e.error === "audio-capture") {
         alert(errorMessage);
       }
     }
