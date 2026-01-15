@@ -62,6 +62,8 @@ const LoaderIcon = () => (
 );
 
 // Audio Waveform Component
+const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
 const AudioWaveform = ({ isListening }) => {
   const barCount = 20;
   const [heights, setHeights] = useState(() => 
@@ -72,107 +74,95 @@ const AudioWaveform = ({ isListening }) => {
   const streamRef = useRef(null);
   const animationFrameRef = useRef(null);
 
-  useEffect(() => {
-    if (!isListening) {
-      // Static heights when not listening
-      setHeights(Array.from({ length: barCount }, () => Math.random() * 30 + 10));
-      
-      // Cleanup audio resources
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close();
-        audioContextRef.current = null;
-      }
-      analyserRef.current = null;
-      return;
+ useEffect(() => {
+  // When not listening → static bars
+  if (!isListening) {
+    setHeights(
+      Array.from({ length: barCount }, () => Math.random() * 30 + 10)
+    );
+    return;
+  }
+
+  // 📱 MOBILE: FAKE waveform (NO microphone access)
+  if (isMobile) {
+    const interval = setInterval(() => {
+      setHeights(
+        Array.from({ length: barCount }, () => Math.random() * 80 + 20)
+      );
+    }, 120);
+
+    return () => clearInterval(interval);
+  }
+
+  // 🖥️ DESKTOP ONLY: real microphone visualization
+  const setupAudioAnalysis = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      streamRef.current = stream;
+
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
+
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 64;
+      analyser.smoothingTimeConstant = 0.8;
+      analyserRef.current = analyser;
+
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const updateWaveform = () => {
+        if (!isListening || !analyserRef.current) return;
+
+        analyserRef.current.getByteFrequencyData(dataArray);
+
+        const step = Math.floor(dataArray.length / barCount);
+        const newHeights = [];
+
+        for (let i = 0; i < barCount; i++) {
+          const value = dataArray[i * step] || 0;
+          newHeights.push(Math.max(10, (value / 255) * 80 + 10));
+        }
+
+        setHeights(newHeights);
+        animationFrameRef.current = requestAnimationFrame(updateWaveform);
+      };
+
+      updateWaveform();
+    } catch (err) {
+      console.error("Waveform mic error:", err);
     }
+  };
 
-    // Setup audio analysis when listening
-    const setupAudioAnalysis = async () => {
-      try {
-        // Get microphone stream
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          } 
-        });
-        streamRef.current = stream;
+  setupAudioAnalysis();
 
-        // Create audio context
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        const audioContext = new AudioContext();
-        audioContextRef.current = audioContext;
+  return () => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (
+      audioContextRef.current &&
+      audioContextRef.current.state !== "closed"
+    ) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+  };
+}, [isListening]);
 
-        // Create analyser
-        const analyser = audioContext.createAnalyser();
-        analyser.fftSize = 64; // Smaller FFT for smoother bars
-        analyser.smoothingTimeConstant = 0.8;
-        analyserRef.current = analyser;
-
-        // Connect microphone to analyser
-        const source = audioContext.createMediaStreamSource(stream);
-        source.connect(analyser);
-
-        // Analyze audio data
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-        const updateWaveform = () => {
-          if (!isListening || !analyserRef.current) {
-            return;
-          }
-
-          analyserRef.current.getByteFrequencyData(dataArray);
-
-          // Map frequency data to bar heights
-          const newHeights = [];
-          const step = Math.floor(dataArray.length / barCount);
-          
-          for (let i = 0; i < barCount; i++) {
-            const index = i * step;
-            const value = dataArray[index] || 0;
-            // Map 0-255 to 10-90% height
-            const height = Math.max(10, (value / 255) * 80 + 10);
-            newHeights.push(height);
-          }
-
-          setHeights(newHeights);
-          animationFrameRef.current = requestAnimationFrame(updateWaveform);
-        };
-
-        updateWaveform();
-      } catch (error) {
-        console.error("Error accessing microphone for waveform:", error);
-        // Fallback to random animation if microphone access fails
-        // Don't show error to user - waveform is just visual
-        const interval = setInterval(() => {
-          setHeights(Array.from({ length: barCount }, () => Math.random() * 80 + 20));
-        }, 150);
-        return () => clearInterval(interval);
-      }
-    };
-
-    setupAudioAnalysis();
-
-    return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
-      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close();
-      }
-    };
-  }, [isListening]);
 
   return (
     <div className="audio-waveform">
@@ -918,21 +908,25 @@ const handleMicClick = async () => {
   }
 
   console.log("🎤 Start voice capture (mobile safe)");
-  setIsListening(true);
+setIsListening(true);
+setIsLoadingWebhook(true); // 🔥 SHOW "يفكر..." IMMEDIATELY
 
   // IMPORTANT: startVoiceCapture callback MUST NOT be async
-  startVoiceCapture((text) => {
-    console.log("🎤 Final voice text:", text);
-    if (text?.trim()) {
-      // 🔥 call webhook immediately (no await)
-      sendVoiceToWorkflow(text);
-    } else {
-      botReply("لم يتم التعرف على الصوت", false);
-    }
-    // cleanup AFTER
+startVoiceCapture((text) => {
+  if (text?.trim()) {
+    sendVoiceToWorkflow(text);
+  } else {
+    setIsLoadingWebhook(false);
+    botReply("لم يتم التعرف على الصوت", false);
+  }
+
+  // ⏳ MOBILE-SAFE CLEANUP
+  setTimeout(() => {
     setIsListening(false);
     stopVoiceCapture();
-  });
+  }, 300);
+});
+
 };
 
   // const handleMicClick = async () => {

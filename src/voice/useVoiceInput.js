@@ -146,6 +146,7 @@
 // }
 let recognition = null;
 
+
 export function startVoiceCapture(onFinalText, sttLang = "ar-SA") {
   const SpeechRecognition =
     window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -177,33 +178,31 @@ export function startVoiceCapture(onFinalText, sttLang = "ar-SA") {
     console.log("🎤 Speech started");
   };
 
-  recognition.onresult = (event) => {
-    const transcript =
-      event.results?.[0]?.[0]?.transcript?.trim() || "";
+let finalTranscript = "";
 
-    console.log("🎤 Transcript:", transcript);
+recognition.onresult = (event) => {
+  finalTranscript =
+    event.results?.[0]?.[0]?.transcript?.trim() || "";
 
-    // 🔥 CRITICAL: sync call ONLY
-    if (transcript && typeof onFinalText === "function") {
-      onFinalText(transcript);
-    }
-  };
+  console.log("🎤 Transcript:", finalTranscript);
 
-  recognition.onerror = (e) => {
-    console.error("❌ Speech error:", e.error);
+  if (finalTranscript && typeof onFinalText === "function") {
+    onFinalText(finalTranscript);
+  }
+};
 
-    if (
-      e.error === "not-allowed" ||
-      e.error === "permission-denied"
-    ) {
-      alert("الرجاء السماح بالميكروفون");
-    }
-  };
+recognition.onend = () => {
+  console.log("🎤 Speech ended");
 
-  recognition.onend = () => {
-    console.log("🎤 Speech ended");
-    recognition = null;
-  };
+  // 📱 MOBILE FALLBACK — VERY IMPORTANT
+  if (!finalTranscript && typeof onFinalText === "function") {
+    console.warn("⚠️ No transcript received (mobile fallback)");
+    onFinalText(""); // allows UI to reset
+  }
+
+  recognition = null;
+};
+
 
   recognition.start();
 }
