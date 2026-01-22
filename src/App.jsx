@@ -75,7 +75,6 @@ const AudioWaveform = ({ isListening }) => {
   const animationFrameRef = useRef(null);
 
  useEffect(() => {
-  // When not listening → static bars
   if (!isListening) {
     setHeights(
       Array.from({ length: barCount }, () => Math.random() * 30 + 10)
@@ -83,7 +82,6 @@ const AudioWaveform = ({ isListening }) => {
     return;
   }
 
-  // 📱 MOBILE: FAKE waveform (NO microphone access)
   if (isMobile) {
     const interval = setInterval(() => {
       setHeights(
@@ -94,7 +92,6 @@ const AudioWaveform = ({ isListening }) => {
     return () => clearInterval(interval);
   }
 
-  // 🖥️ DESKTOP ONLY: real microphone visualization
   const setupAudioAnalysis = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -245,7 +242,6 @@ const CATEGORY_LABELS = {
   meals: "وجبات",
   sauces: "صوصات",
   drinks: "مشروبات",
-  appetizers: "مقبلات",
 };
 
 const CATEGORY_MAP = {
@@ -253,7 +249,6 @@ const CATEGORY_MAP = {
   "وجبات": "meals",
   "صوصات": "sauces",
   "مشروبات": "drinks",
-  "مقبلات": "appetizers",
 };
 
 // Reverse map for category detection
@@ -262,7 +257,6 @@ const CATEGORY_KEYWORDS = {
   "ساندويشات": ["ساندويشات", "ساندويش", "رول", "سندويش"],
   "وجبات": ["وجبات", "وجبة", "بلدوزر", "كرين"],
   "صوصات": ["صوصات", "صوص", "متومة", "طحينة"],
-  "مقبلات": ["مقبلات", "مقبل"],
 };
 
 /* =======================
@@ -270,6 +264,7 @@ const CATEGORY_KEYWORDS = {
 ======================= */
 const N8N_VOICE_WEBHOOK = "https://n8n.srv1004057.hstgr.cloud/webhook/trio";
 const N8N_CHAT_WEBHOOK = "https://n8n.srv1004057.hstgr.cloud/webhook/restaurant";
+const N8N_PHONE_WEBHOOK = "https://n8n.srv1004057.hstgr.cloud/webhook/triophone";
 const SESSION_KEY = "zacses_session_id";
 
 /* =======================
@@ -336,12 +331,16 @@ const normalizeN8nOrder = (rawOrder) => {
     ? rawOrder
     : Object.values(rawOrder);
 
-  return list.map((item, index) => ({
-    id: Date.now() + index,
-    name: item.title || item.name || "عنصر",
-    price: Number(item.price || 0),
-    image_url: null,
-  }));
+  return list.map((item, index) => {
+    const lineId = `${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`;
+    return {
+      id: Date.now() + index,
+      lineId,
+      name: item.title || item.name || "عنصر",
+      price: Number(item.price || 0),
+      image_url: null,
+    };
+  });
 };
 
 let audioContext = null;
@@ -375,7 +374,7 @@ console.log("🔧 Environment:", process.env.NODE_ENV);
 console.log("🔧 REACT_APP_BACKEND_API:", process.env.REACT_APP_BACKEND_API);
 
   const [menuState, setMenuState] = useState(INITIAL_MENU);
-  const [currentCategory, setCurrentCategory] = useState(null);
+  const [currentCategory, setCurrentCategory] = useState("sandwiches");
   const [order, setOrder] = useState([]);
   const [sessionId, setSessionId] = useState(null);
   const [isListening, setIsListening] = useState(false);
@@ -388,9 +387,16 @@ const [address, setAddress] = useState("");
 const [notes, setNotes] = useState("");
 const [modalStep, setModalStep] = useState(null);
 const [hasPlayedWelcome, setHasPlayedWelcome] = useState(false);
-const [itemNotes, setItemNotes] = useState({}); // Store notes for each item: { itemId: "notes text" }
-const [waitingForNotes, setWaitingForNotes] = useState(false); // Track if we're waiting for notes response
+const [itemNotes, setItemNotes] = useState({}); // { [lineId]: "note text" }
+const [noteTargetLineId, setNoteTargetLineId] = useState(null);
+const [isNoteListening, setIsNoteListening] = useState(false);
+const noteTargetLineIdRef = useRef(null);
+const isNoteListeningRef = useRef(false);
 const [conversationStarted, setConversationStarted] = useState(false); // Track if user started the conversation 
+const [lookupPhone, setLookupPhone] = useState("");
+const [previousOrders, setPreviousOrders] = useState([]);
+const [isLoadingPreviousOrders, setIsLoadingPreviousOrders] = useState(false);
+const [previousOrdersError, setPreviousOrdersError] = useState("");
 // customer | method | delivery | notes
 
 
@@ -439,6 +445,24 @@ const [conversationStarted, setConversationStarted] = useState(false); // Track 
     if (ar) utterance.voice = ar;
 
     window.speechSynthesis.speak(utterance);
+  };
+
+  const speakAndWait = (text) => {
+    if (!("speechSynthesis" in window) || !text) return Promise.resolve();
+    return new Promise((resolve) => {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "ar-SA";
+      utterance.rate = 0.95;
+
+      const voices = window.speechSynthesis.getVoices();
+      const ar = voices.find((v) => v.lang.startsWith("ar"));
+      if (ar) utterance.voice = ar;
+
+      utterance.onend = resolve;
+      utterance.onerror = resolve;
+      window.speechSynthesis.speak(utterance);
+    });
   };
 
   const botReply = (text, speakIt = true) => {
@@ -619,6 +643,83 @@ const finalizeCashOrder = async () => {
      VOICE
   ======================= */
   const audioRef = useRef(null);
+  const NOTE_PROMPT_AUDIO_URL =
+    "https://svrgtdigntwgepklbyav.supabase.co/storage/v1/object/public/nmar/item_notes.mp3";
+
+  const ensureMicrophonePermission = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      stream.getTracks().forEach((t) => t.stop());
+      return true;
+    } catch (e) {
+      console.error("❌ getUserMedia failed:", e);
+      alert("الرجاء السماح باستخدام الميكروفون");
+      return false;
+    }
+  };
+
+  // Stop all playing audio and speech
+  const stopAllAudio = () => {
+    // Stop audio playback
+    if (audioRef.current) {
+      const a = audioRef.current;
+      try {
+        a.pause();
+        a.currentTime = 0;
+        // Resolve any awaiting "ended" listeners (used by note prompt)
+        if (typeof a.onended === "function") a.onended();
+      } catch {}
+      audioRef.current = null;
+    }
+    
+    // Cancel speech synthesis
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    
+    setIsPlayingAudio(false);
+    console.log("🔇 All audio stopped");
+  };
+
+ const playAudioFromUrlAndWait = async (url) => {
+  if (!url) return;
+
+  try {
+    // 🔓 Unlock audio context
+    if (!audioContext) {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    if (audioContext.state === "suspended") {
+      await audioContext.resume();
+    }
+
+    // Stop previous audio
+    stopAllAudio();
+
+    const audio = new Audio(url);
+    audioRef.current = audio;
+    audio.crossOrigin = "anonymous";
+
+    await audio.play();
+    setIsPlayingAudio(true);
+
+    await new Promise((resolve) => {
+      audio.onended = () => {
+        setIsPlayingAudio(false);
+        resolve();
+      };
+      audio.onerror = () => {
+        setIsPlayingAudio(false);
+        resolve();
+      };
+    });
+  } catch (err) {
+    console.error("❌ Audio playback failed:", err);
+  }
+ };
 
  const playAudioFromUrl = async (url) => {
   if (!url) return;
@@ -634,10 +735,7 @@ const finalizeCashOrder = async () => {
     }
 
     // Stop previous audio
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
+    stopAllAudio();
 
     const audio = new Audio(url);
     audioRef.current = audio;
@@ -654,6 +752,140 @@ const finalizeCashOrder = async () => {
 
   } catch (err) {
     console.error("❌ Audio playback failed:", err);
+  }
+};
+
+const fetchPreviousOrdersByPhone = async (phone) => {
+  const clean = (phone || "").replace(/[^\d+]/g, "").trim();
+  if (!clean) return;
+
+  setPreviousOrdersError("");
+  setIsLoadingPreviousOrders(true);
+  setPreviousOrders([]); // reset before fetching
+
+  const cleanNoLeadingZero = clean.replace(/^0+/, "") || clean;
+  const formatted =
+    /^059\d{7}$/.test(clean) ? `(059) ${clean.slice(3, 6)}-${clean.slice(6)}` : null;
+
+  // Airtable often stores 059 as "(059) XXX-XXXX"; short numbers as plain digits.
+  // Send primary filter value in Airtable's format so n8n exact match works.
+  const primary = formatted ?? clean;
+
+  const variants = [clean, primary];
+  if (cleanNoLeadingZero !== clean) variants.push(cleanNoLeadingZero);
+  const phone_variants = [...new Set(variants)];
+
+  try {
+    const payload = {
+      phone_number: primary,
+      phone: primary,
+      customer_number: primary,
+      phone_number_digits: clean,
+      phone_number_alt: cleanNoLeadingZero !== clean ? cleanNoLeadingZero : undefined,
+      phone_number_formatted: formatted || undefined,
+      phone_variants,
+      returnAll: true,
+      return_all: true,
+      all: true,
+      fetch_all: true,
+      limit: 50,
+    };
+
+    const res = await fetch(N8N_PHONE_WEBHOOK, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const rawText = await res.text().catch(() => "");
+    let raw;
+    try {
+      raw = rawText ? JSON.parse(rawText) : null;
+    } catch (e) {
+      console.warn("triophone invalid JSON:", rawText);
+      throw new Error("Invalid JSON");
+    }
+
+    if (!res.ok) {
+      console.warn("triophone non-OK:", res.status, raw);
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    // n8n may return:
+    // - Array of orders
+    // - Array of { json: order }
+    // - Single order object (common when n8n responds with "First item")
+    // - {} when no results
+    let list = [];
+    if (Array.isArray(raw)) {
+      // Some n8n setups return [{ json: {...} }, ...]
+      if (raw.length > 0 && raw.every((x) => x && typeof x === "object" && "json" in x)) {
+        list = raw.map((x) => x.json).filter(Boolean);
+      } else {
+        list = raw;
+      }
+    } else {
+      let output = raw?.output || raw?.response || raw?.result || raw;
+      if (raw?.json && typeof raw.json === "object" && !Array.isArray(raw.json)) {
+        output = raw.json;
+      }
+      if (!output && raw && typeof raw === "object" && !Array.isArray(raw)) {
+        output = raw;
+      }
+
+      const isLikelyOrderRecord =
+        output &&
+        typeof output === "object" &&
+        !Array.isArray(output) &&
+        Object.keys(output).length > 0 &&
+        (output.id || output.created_at || output.createdTime) &&
+        (output.phone_number != null || output.total_price != null || output.orders != null || output.Orders != null || output.fields != null);
+
+      if (isLikelyOrderRecord) {
+        list = [output];
+      } else {
+        const candidate =
+          output?.orders ||
+          output?.previous_orders ||
+          output?.order_history ||
+          output?.data ||
+          output?.result ||
+          output;
+        list = Array.isArray(candidate) ? candidate : [];
+      }
+    }
+
+    // Always store plain objects (unwrap { json } if present)
+    const normalized = list
+      .map((x) => (x && typeof x === "object" && "json" in x ? x.json : x))
+      .filter((x) => x && typeof x === "object" && Object.keys(x).length > 0);
+
+    // Sort newest first if date exists
+    const sorted = [...normalized].sort((a, b) => {
+      const da = new Date(a?.created_at || a?.createdTime || a?.date || 0).getTime();
+      const db = new Date(b?.created_at || b?.createdTime || b?.date || 0).getTime();
+      return db - da;
+    });
+
+    console.log("📞 triophone raw:", Array.isArray(raw) ? `array[${raw.length}]` : "object", raw && typeof raw === "object" && !Array.isArray(raw) ? Object.keys(raw) : "");
+    if (Array.isArray(raw) && raw.length > 0) {
+      const e = raw[0];
+      console.log("📞 raw[0] keys:", e && typeof e === "object" ? Object.keys(e) : typeof e, "has json?", e && typeof e === "object" && "json" in e);
+      if (e?.json) console.log("📞 raw[0].json keys:", Object.keys(e.json || {}));
+    }
+    console.log("📞 triophone orders count:", sorted.length, "phone:", clean);
+    if (sorted.length > 0) {
+      const first = sorted[0];
+      console.log("📞 first order keys:", Object.keys(first || {}));
+      console.log("📞 first order.orders:", first?.orders, "Orders:", first?.Orders, "fields:", first?.fields);
+    }
+    setPreviousOrders(sorted);
+  } catch (e) {
+    console.warn("Previous orders fetch failed:", e);
+    setPreviousOrders([]);
+    setPreviousOrdersError("تعذر جلب الطلبات السابقة. تأكد من أن الويبهوك يعمل ويُرجع JSON.");
+  } finally {
+    setIsLoadingPreviousOrders(false);
   }
 };
 
@@ -727,34 +959,12 @@ const voiceOrder =
       const hasItems = items && items.length > 0;
       const hasOrder = voiceOrder && voiceOrder.length > 0;
       
-      // IMPORTANT: Check if this is a notes response FIRST (before processing audio)
-      // If we're waiting for notes and transcript doesn't contain order keywords
-      const isNotesResponse = waitingForNotes && 
-                              transcript && 
-                              transcript.trim().length > 0 && 
-                              order.length > 0 && 
-                              !transcript.toLowerCase().includes("بدي") &&
-                              !transcript.toLowerCase().includes("اعطيني") &&
-                              !transcript.toLowerCase().includes("اطلب") &&
-                              !transcript.toLowerCase().includes("بدي أطلب");
-      
-      if (isNotesResponse) {
-        // Notes response - save as general order notes
-        console.log("📝 Saving notes response as general order notes:", transcript.trim());
-        setNotes(transcript.trim()); // Save voice notes to general order notes
-        setWaitingForNotes(false);
-        setIsLoadingWebhook(false);
-        botReply(`تم حفظ الملاحظات: ${transcript.trim()}`, false); // Confirm without speaking
-        return; // Exit early - no audio, no further processing
-      }
-      
       // Play audio if available (play first, then show items)
       // Check multiple possible locations for audio
       const audioUrl = data?.audio || data?.output?.audio || data?.response?.audio;
       
-      // If showing items (menu) without order, always play welcome.mp3 (ignore audioUrl from n8n)
+      // If showing items (menu) without order, play welcome.mp3
       if (hasItems && !hasOrder) {
-        // If showing items (menu) without order, always play welcome.mp3 (ignore audioUrl from n8n)
         console.log("🎵 Playing welcome voice for items display");
         setTimeout(() => {
           playAudioFromUrl("https://puwpdltpzxlbqphnhswz.supabase.co/storage/v1/object/public/Trio_voices/welcome.mp3");
@@ -773,40 +983,30 @@ const voiceOrder =
       } else if (!hasOrder) {
         console.warn("⚠️ No audio found in response");
       }
-      // If hasOrder, don't play any audio here - it will be played in the order section below
+      // If hasOrder, don't play menu/welcome audio while adding to order
 
 if (voiceOrder && voiceOrder.length > 0) {
   console.log("🛒 Found order from voice:", voiceOrder);
 
   const normalizedOrder = normalizeN8nOrder(voiceOrder);
   
-  // Normal order addition (no individual item notes)
-    setOrder((prev) => [...prev, ...normalizedOrder]);
-    
-    // Play ONLY "تم إضافة الصنف" audio, then item_notes.mp3 after 4 seconds
-    // Don't play any audio from n8n response when adding order
-    setWaitingForNotes(true);
-    
-    // Play added.mp3, then after 4 seconds play item_notes.mp3
-    const playAddConfirmationThenNotes = async () => {
-      // Play confirmation audio ONLY (ignore any audio from n8n)
-      try {
-        const addedAudio = new Audio("https://puwpdltpzxlbqphnhswz.supabase.co/storage/v1/object/public/Trio_voices/added.mp3");
-        addedAudio.crossOrigin = "anonymous";
-        await addedAudio.play();
-      } catch (err) {
-        console.error("Error playing added audio:", err);
-      }
-      
-      // After 4 seconds, play item_notes.mp3 (regardless of when added.mp3 finishes)
-      setTimeout(() => {
-        playAudioFromUrl("https://svrgtdigntwgepklbyav.supabase.co/storage/v1/object/public/nmar/item_notes.mp3");
-      }, 4000);
-    };
-    
-    setTimeout(() => {
-      playAddConfirmationThenNotes();
-    }, 500);
+  setOrder((prev) => [...prev, ...normalizedOrder]);
+
+  // Play ONLY "تم إضافة الصنف" audio (no auto prompt for notes)
+  const playAddConfirmation = async () => {
+    stopAllAudio();
+    try {
+      const addedAudio = new Audio("https://puwpdltpzxlbqphnhswz.supabase.co/storage/v1/object/public/Trio_voices/added.mp3");
+      addedAudio.crossOrigin = "anonymous";
+      await addedAudio.play();
+    } catch (err) {
+      console.error("Error playing added audio:", err);
+    }
+  };
+
+  setTimeout(() => {
+    playAddConfirmation();
+  }, 300);
   }
 
       if (items && items.length > 0) {
@@ -852,30 +1052,10 @@ const sendVoiceToWorkflow = (text) => {
   });
 };
 
-  // const sendVoiceToWorkflow = async (text) => {
-  //   if (!text || !text.trim()) {
-  //     console.warn("⚠️ Empty text in sendVoiceToWorkflow");
-  //     return;
-  //   }
-    
-  //   console.log("📤 Sending voice text to workflow:", text);
-  //   // Set loading state before calling webhook
-  //   setIsLoadingWebhook(true);
-  //   try {
-  //     await callWebhook(text);
-  //   } catch (error) {
-  //     console.error("❌ Error in sendVoiceToWorkflow:", error);
-  //     setIsLoadingWebhook(false);
-  //     botReply("حدث خطأ أثناء معالجة الرسالة، الرجاء المحاولة مرة أخرى.", false);
-  //   }
-  // };
 
-  // Check microphone permission status
-
-  // Start conversation - play welcome audio and show microphone button
   const handleStartConversation = async () => {
     // Play welcome audio
-    await playAudioFromUrl("https://svrgtdigntwgepklbyav.supabase.co/storage/v1/object/public/nmar/welcome_voice.mp3");
+    await playAudioFromUrl("https://wvaovsjwzdlyjcsyfvtk.supabase.co/storage/v1/object/public/Trio/welcome_trio.mp3");
     // Mark conversation as started
     setConversationStarted(true);
     setHasPlayedWelcome(true);
@@ -895,17 +1075,14 @@ const handleMicClick = async () => {
     return;
   }
 
-  // ✅ ONLY reliable permission check
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
-    stream.getTracks().forEach((t) => t.stop());
-  } catch (e) {
-    console.error("❌ getUserMedia failed:", e);
-    alert("الرجاء السماح باستخدام الميكروفون");
-    return;
-  }
+  // ⏹️ Stop all playing audio when starting to record
+  stopAllAudio();
+
+  // Notes are captured via the per-item note button, not the main mic.
+  if (isNoteListening) return;
+
+  const hasPermission = await ensureMicrophonePermission();
+  if (!hasPermission) return;
 
   console.log("🎤 Start voice capture (mobile safe)");
 setIsListening(true);
@@ -993,14 +1170,12 @@ startVoiceCapture((text) => {
      ORDER
   ======================= */
  const addToOrder = (item) => {
-  // Add item without notes field
-  setOrder((o) => [...o, item]);
-  
-  // Play "تم إضافة الصنف" audio first, then item_notes.mp3 after 4 seconds
-  setWaitingForNotes(true);
-  
-  const playAddConfirmationThenNotes = async () => {
-    // Play confirmation audio
+  const lineId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  setOrder((o) => [...o, { ...item, lineId }]);
+
+  // Play "تم إضافة الصنف" audio only (no auto notes prompt)
+  const playAddConfirmation = async () => {
+    stopAllAudio();
     try {
       const addedAudio = new Audio("https://puwpdltpzxlbqphnhswz.supabase.co/storage/v1/object/public/Trio_voices/added.mp3");
       addedAudio.crossOrigin = "anonymous";
@@ -1008,21 +1183,26 @@ startVoiceCapture((text) => {
     } catch (err) {
       console.error("Error playing added audio:", err);
     }
-    
-    // After 4 seconds, play item_notes.mp3 (regardless of when added.mp3 finishes)
-    setTimeout(() => {
-      playAudioFromUrl("https://svrgtdigntwgepklbyav.supabase.co/storage/v1/object/public/nmar/item_notes.mp3");
-    }, 4000);
   };
-  
+
   setTimeout(() => {
-    playAddConfirmationThenNotes();
-  }, 500);
+    playAddConfirmation();
+  }, 250);
 };
 
 
   const removeFromOrder = (index) => {
-    setOrder((o) => o.filter((_, i) => i !== index));
+    setOrder((o) => {
+      const removed = o[index];
+      if (removed?.lineId) {
+        setItemNotes((prev) => {
+          const next = { ...prev };
+          delete next[removed.lineId];
+          return next;
+        });
+      }
+      return o.filter((_, i) => i !== index);
+    });
   };
 
   const total = useMemo(
@@ -1162,6 +1342,7 @@ const resetOrder = () => {
   setCustomerPhone("");
   setAddress("");
   setNotes("");
+  setItemNotes({});
   setPaymentMethod(null);
   setOrderType(null);
   setModalStep(null);
@@ -1181,6 +1362,20 @@ const finalizeOrder = async (method) => {
     price: item.price
   }));
 
+  const itemNotesLines = order
+    .map((item) => {
+      const lineId = item?.lineId;
+      const note = lineId ? itemNotes[lineId] : "";
+      if (!note) return null;
+      return `- ${item.name}: ${note}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+
+  const combinedNotes = [notes?.trim(), itemNotesLines ? `ملاحظات على الأصناف:\n${itemNotesLines}` : ""]
+    .filter(Boolean)
+    .join("\n\n");
+
   const payload = {
     customer_name: customerName,
     customer_number: customerPhone,
@@ -1189,7 +1384,7 @@ const finalizeOrder = async (method) => {
     session_id: sessionId,
     order_type: orderType,
     address: orderType === "delivery" ? address : null,
-    notes, // General order notes
+    notes: combinedNotes, // General + per-item notes
   };
 
   try {
@@ -1270,6 +1465,39 @@ const finalizeOrder = async (method) => {
 
       <div className="main-layout">
         <div className="left-pane purple-panel">
+        {/* Categories Bar */}
+<div className="categories-bar">
+  {Object.entries(CATEGORY_LABELS).map(([key, label]) => (
+    <button
+      key={key}
+      className={`category-btn ${currentCategory === key ? "active" : ""}`}
+      onClick={() => {
+        setCurrentCategory(key);
+        setWebhookItems([]); // hide searched items
+      }}
+    >
+      {label}
+    </button>
+  ))}
+</div>
+{/* Static Menu Items */}
+{currentCategory && webhookItems.length === 0 && (
+  <div className="menu-items-grid">
+    {menuState[currentCategory]?.map((item) => (
+      <div key={item.id} className="menu-item-card">
+        <h3>{item.name}</h3>
+        <p className="item-price">{item.price} شيكل</p>
+        <button
+          className="add-item-btn"
+          onClick={() => addToOrder(item)}
+        >
+          <PlusIcon /> إضافة
+        </button>
+      </div>
+    ))}
+  </div>
+)}
+
           {/* Searched Items Section - Above waveform */}
           {webhookItems.length > 0 && (
             <div className="searched-items-section">
@@ -1317,7 +1545,7 @@ const finalizeOrder = async (method) => {
                 <button
                   className={`voice-circle ${isListening ? "listening" : ""}`}
                   onClick={handleMicClick}
-                  disabled={isLoadingWebhook}
+                  disabled={isLoadingWebhook || isNoteListening}
                 >
                   {isListening ? <StopIcon /> : <MicIcon />}
                 </button>
@@ -1346,36 +1574,217 @@ const finalizeOrder = async (method) => {
        <aside className="panel order-panel yellow-panel">
   <h2><ReceiptIcon /> طلبك</h2>
 
-  {order.length === 0 ? (
-    <p className="empty-order">الطلب فارغ</p>
-  ) : (
-    <>
-      <div className="order-items">
-        {order.map((i, idx) => (
-          <div key={idx} className="order-item">
-            <div style={{ flex: 1, width: '100%' }}>
-              <span>{i.name} — {i.price} شيكل</span>
-            </div>
-            <button
-              className="remove-item-btn"
-              onClick={() => removeFromOrder(idx)}
-            >
-              <DeleteIcon />
-            </button>
+  {/* Phone lookup card */}
+  <div className="phone-lookup-card">
+    <div className="phone-lookup-row">
+      <input
+        className="phone-lookup-input"
+        placeholder="أدخل رقم الجوال لعرض الطلبات السابقة"
+        value={lookupPhone}
+        onChange={(e) => {
+          setLookupPhone(e.target.value);
+          setPreviousOrders([]);
+          setPreviousOrdersError("");
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") fetchPreviousOrdersByPhone(lookupPhone);
+        }}
+        inputMode="tel"
+      />
+      <button
+        className="phone-lookup-btn"
+        onClick={() => fetchPreviousOrdersByPhone(lookupPhone)}
+        disabled={isLoadingPreviousOrders || !lookupPhone.trim()}
+        title="عرض الطلبات السابقة"
+      >
+        {isLoadingPreviousOrders ? <LoaderIcon /> : "عرض"}
+      </button>
+    </div>
+
+    <div className="phone-lookup-meta">
+      {previousOrdersError && <div className="phone-lookup-hint">{previousOrdersError}</div>}
+    </div>
+  </div>
+
+  <div className="order-split">
+    <div className="order-col current-order-col">
+      {order.length === 0 ? (
+        <p className="empty-order">الطلب فارغ</p>
+      ) : (
+        <>
+          <div className="order-items">
+            {order.map((i, idx) => (
+              <div key={i.lineId || idx} className="order-item">
+                <div className="order-item-main">
+                  <div className="order-item-title">
+                    <span>{i.name} — {i.price} شيكل</span>
+                  </div>
+                  {i.lineId && itemNotes[i.lineId] && (
+                    <div className="order-item-note">
+                      ملاحظة: {itemNotes[i.lineId]}
+                    </div>
+                  )}
+                </div>
+
+                <div className="order-item-actions">
+                  <button
+                    className={`item-note-btn ${
+                      isNoteListening && noteTargetLineId === i.lineId ? "listening" : ""
+                    } ${itemNotes[i.lineId] ? "has-note" : ""}`}
+                    onClick={async () => {
+                      const lineId = i.lineId;
+                      if (!lineId) return;
+
+                      // Toggle off if same item is currently listening
+                      if (isNoteListening && noteTargetLineId === lineId) {
+                        setIsNoteListening(false);
+                        setNoteTargetLineId(null);
+                        isNoteListeningRef.current = false;
+                        noteTargetLineIdRef.current = null;
+                        stopVoiceCapture();
+                        stopAllAudio();
+                        return;
+                      }
+
+                      // Don't start note capture if main mic/webhook is busy
+                      if (isLoadingWebhook || isListening) return;
+
+                      // Stop any current audio before prompting
+                      stopAllAudio();
+
+                      const hasPermission = await ensureMicrophonePermission();
+                      if (!hasPermission) return;
+
+                      setNoteTargetLineId(lineId);
+                      setIsNoteListening(true);
+                      noteTargetLineIdRef.current = lineId;
+                      isNoteListeningRef.current = true;
+
+                      // Play STATIC prompt audio, then start capture from this button
+                      await playAudioFromUrlAndWait(NOTE_PROMPT_AUDIO_URL);
+                      if (!isNoteListeningRef.current || noteTargetLineIdRef.current !== lineId) return;
+
+                      startVoiceCapture((text) => {
+                        const t = text?.trim();
+                        if (t) {
+                          setItemNotes((prev) => {
+                            const existing = (prev?.[lineId] || "").trim();
+                            const nextText = existing ? `${existing}\n${t}` : t;
+                            return { ...prev, [lineId]: nextText };
+                          });
+                        }
+
+                        setTimeout(() => {
+                          setIsNoteListening(false);
+                          setNoteTargetLineId(null);
+                          isNoteListeningRef.current = false;
+                          noteTargetLineIdRef.current = null;
+                          stopVoiceCapture();
+                        }, 300);
+                      });
+                    }}
+                    disabled={
+                      isLoadingWebhook ||
+                      isListening ||
+                      (isNoteListening && noteTargetLineId !== i.lineId)
+                    }
+                    title="تسجيل ملاحظة على هذا الصنف"
+                  >
+                   اضف ملاحظة
+                  </button>
+
+                  <button
+                    className="remove-item-btn"
+                    onClick={() => removeFromOrder(idx)}
+                  >
+                    <DeleteIcon />
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
-        ))}
+
+          <div className="order-total">
+            <strong>المجموع: {total} شيكل</strong>
+          </div>
+        </>
+      )}
+
+      <button className="confirm" onClick={openModal} disabled={order.length === 0}>
+        تأكيد الطلب
+      </button>
+    </div>
+
+    <div className="order-col previous-orders-col">
+      <div className="previous-orders-header">
+        <strong>آخر الطلبات</strong>
+        <span className="previous-orders-sub">حسب رقم الجوال</span>
       </div>
 
-      <div className="order-total">
-        <strong>المجموع: {total} شيكل</strong>
-      </div>
+      {!lookupPhone.trim() ? (
+        <div className="previous-orders-empty">
+          أدخل رقم الجوال بالأعلى لعرض آخر الطلبات.
+        </div>
+      ) : isLoadingPreviousOrders ? (
+        <div className="previous-orders-loading">
+          <LoaderIcon /> جاري جلب الطلبات...
+        </div>
+      ) : previousOrders.length === 0 ? (
+        <div className="previous-orders-empty">
+          لا يوجد طلبات سابقة
+        </div>
+      ) : (
+        <div className="previous-orders-list">
+          <div className="previous-orders-count">
+            عدد الطلبات: {previousOrders.length}
+          </div>
+          {previousOrders.map((o, index) => {
+            const order = o?.json ?? o;
+            const raw =
+              order?.orders ??
+              order?.Orders ??
+              order?.order ??
+              order?.order_items ??
+              order?.items ??
+              order?.fields?.orders ??
+              order?.fields?.Orders ??
+              order?.fields?.order ??
+              [];
+            const items =
+              typeof raw === "string"
+                ? raw
+                    .split(/[,،\n]+/)
+                    .map((s) => s.trim())
+                    .filter(Boolean)
+                : Array.isArray(raw)
+                  ? raw
+                      .map((it) => (typeof it === "string" ? it : (it?.name || it?.title || "")))
+                      .map((s) => String(s).trim())
+                      .filter(Boolean)
+                  : [];
 
-     <button className="confirm" onClick={openModal}>
-  تأكيد الطلب
-</button>
-
-    </>
-  )}
+            return (
+              <div key={order?.id ?? o?.id ?? index} className="previous-order-line">
+                {items.length > 0 ? (
+                  <div className="previous-orders-chips">
+                    {items.map((name, idx) => (
+                      <span key={`${order?.id ?? index}-${name}-${idx}`} className="order-chip">
+                        {name}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="previous-orders-empty inline" title={JSON.stringify(Object.keys(order || {}))}>
+                    — {index === 0 && previousOrders.length > 0 ? `(مفاتيح: ${Object.keys(order || {}).join(", ")})` : ""}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  </div>
 </aside>
 {modalStep && (
   <div className="modal-overlay">
