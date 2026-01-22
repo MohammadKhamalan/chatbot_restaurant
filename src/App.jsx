@@ -241,7 +241,6 @@ const CATEGORY_KEYWORDS = {
    CONFIG
 ======================= */
 const N8N_VOICE_WEBHOOK = "https://n8n.srv1004057.hstgr.cloud/webhook/trio";
-const N8N_CHAT_WEBHOOK = "https://n8n.srv1004057.hstgr.cloud/webhook/restaurant";
 const N8N_PHONE_WEBHOOK = "https://n8n.srv1004057.hstgr.cloud/webhook/triophone";
 const SESSION_KEY = "zacses_session_id";
 
@@ -327,15 +326,7 @@ let audioContext = null;
    APP
 ======================= */
 function App() {
-  const [messages, setMessages] = useState([
-    {
-      id: 1,
-      sender: "bot",
-      text:
-        "مرحبًا بك في زَكسِس ✨\n" +
-        "اسألني عن الساندويشات، الوجبات، المشروبات أو أي شيء في القائمة.",
-    },
-  ]);
+ 
 const openModal = () => {
   setModalStep("method");
 };
@@ -425,9 +416,9 @@ const [previousOrdersError, setPreviousOrdersError] = useState("");
   };
 
   const botReply = (text, speakIt = true) => {
-    setMessages((m) => [...m, { id: Date.now(), sender: "bot", text }]);
-    if (speakIt) speak(text);
-  };
+  if (speakIt) speak(text);
+};
+
 
   /* =======================
      MENU UPDATE
