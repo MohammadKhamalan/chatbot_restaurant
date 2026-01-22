@@ -300,7 +300,7 @@ const normalizeN8nItems = (rawItems, detectedCategory = null) => {
     category_name: categoryName,
   }));
 };
-/* 🔴 normalize n8n order */
+/* 🔴 normalize n8n order — support quantity; merge duplicates into one line */
 const normalizeN8nOrder = (rawOrder) => {
   if (!rawOrder) return [];
 
@@ -308,13 +308,33 @@ const normalizeN8nOrder = (rawOrder) => {
     ? rawOrder
     : Object.values(rawOrder);
 
-  return list.map((item, index) => {
+  const withQty = list.map((item) => ({
+    id: item.id ?? null,
+    name: item.title || item.name || "عنصر",
+    price: Number(item.price || 0),
+    quantity: Math.max(1, Number(item.quantity || item.qty || 1)),
+  }));
+
+  const merged = [];
+  for (const it of withQty) {
+    const key = `${it.id ?? ""}|${it.name}|${it.price}`;
+    const idx = merged.findIndex(
+      (m) => `${m.id ?? ""}|${m.name}|${m.price}` === key
+    );
+    if (idx >= 0) {
+      const prev = merged[idx];
+      merged[idx] = { ...prev, quantity: prev.quantity + it.quantity };
+    } else merged.push({ ...it });
+  }
+
+  return merged.map((item, index) => {
     const lineId = `${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`;
     return {
-      id: Date.now() + index,
+      id: item.id ?? Date.now() + index,
       lineId,
-      name: item.title || item.name || "عنصر",
-      price: Number(item.price || 0),
+      name: item.name,
+      price: item.price,
+      quantity: item.quantity,
       image_url: null,
     };
   });
@@ -365,6 +385,7 @@ const [lookupPhone, setLookupPhone] = useState("");
 const [previousOrders, setPreviousOrders] = useState([]);
 const [isLoadingPreviousOrders, setIsLoadingPreviousOrders] = useState(false);
 const [previousOrdersError, setPreviousOrdersError] = useState("");
+const [showPhoneModal, setShowPhoneModal] = useState(true);
 // customer | method | delivery | notes
 
 
@@ -702,6 +723,7 @@ const fetchPreviousOrdersByPhone = async (phone) => {
     console.warn("Previous orders fetch failed:", e);
     setPreviousOrders([]);
     setPreviousOrdersError("تعذر جلب الطلبات السابقة. تأكد من أن الويبهوك يعمل ويُرجع JSON.");
+    throw e;
   } finally {
     setIsLoadingPreviousOrders(false);
   }
@@ -987,9 +1009,24 @@ startVoiceCapture((text) => {
   /* =======================
      ORDER
   ======================= */
- const addToOrder = (item) => {
-  const lineId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  setOrder((o) => [...o, { ...item, lineId }]);
+ const addToOrder = (item, quantity = 1) => {
+  const qty = Math.max(1, Number(quantity));
+  setOrder((o) => {
+    const key = (i) => `${i.id ?? ""}|${i.name}|${i.price}`;
+    const itemKey = `${item.id ?? ""}|${item.name}|${item.price}`;
+    const existingIdx = o.findIndex((i) => key(i) === itemKey);
+    if (existingIdx >= 0) {
+      const next = [...o];
+      const prev = next[existingIdx];
+      next[existingIdx] = {
+        ...prev,
+        quantity: (prev.quantity ?? 1) + qty,
+      };
+      return next;
+    }
+    const lineId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    return [...o, { ...item, lineId, quantity: qty }];
+  });
 
   // Play "تم إضافة الصنف" audio only (no auto notes prompt)
   const playAddConfirmation = async () => {
@@ -1024,7 +1061,11 @@ startVoiceCapture((text) => {
   };
 
   const total = useMemo(
-    () => order.reduce((sum, i) => sum + (i.price || 0), 0),
+    () =>
+      order.reduce(
+        (sum, i) => sum + (i.price || 0) * (i.quantity ?? 1),
+        0
+      ),
     [order]
   );
 /* =======================
@@ -1168,10 +1209,11 @@ const finalizeOrder = async (method) => {
 
   // Prepare order items with notes
   // Prepare order items (no individual item notes)
-  const orderItemsWithNotes = order.map(item => ({
+  const orderItemsWithNotes = order.map((item) => ({
     id: item.id,
     name: item.name,
-    price: item.price
+    price: item.price,
+    quantity: item.quantity ?? 1,
   }));
 
   const itemNotesLines = order
@@ -1257,9 +1299,64 @@ const finalizeOrder = async (method) => {
 };
 
 
+  const handlePhoneModalSubmit = async () => {
+    const phone = lookupPhone.trim();
+    if (!phone) return;
+    setPreviousOrdersError("");
+    try {
+      await fetchPreviousOrdersByPhone(phone);
+      setShowPhoneModal(false);
+    } catch {
+      /* Error already set in fetchPreviousOrdersByPhone; stay in modal */
+    }
+  };
+
   /* =======================
      UI
   ======================= */
+  if (showPhoneModal) {
+    return (
+      <div className="app-shell">
+        <div className="phone-modal-overlay">
+          <div className="phone-modal">
+            <h2>مرحباً بك</h2>
+            <p className="phone-modal-sub">أدخل رقم الجوال لمتابعة وعرض آخر الطلبات</p>
+            <input
+              className="phone-modal-input"
+              placeholder="رقم الجوال"
+              value={lookupPhone}
+              onChange={(e) => {
+                setLookupPhone(e.target.value);
+                setPreviousOrdersError("");
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handlePhoneModalSubmit();
+              }}
+              inputMode="tel"
+              autoFocus
+            />
+            {previousOrdersError && (
+              <div className="phone-modal-error">{previousOrdersError}</div>
+            )}
+            <button
+              className="phone-modal-btn"
+              onClick={handlePhoneModalSubmit}
+              disabled={!lookupPhone.trim() || isLoadingPreviousOrders}
+            >
+              {isLoadingPreviousOrders ? (
+                <>
+                  <LoaderIcon /> جاري جلب الطلبات...
+                </>
+              ) : (
+                "متابعة"
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       <header className="navbar">
@@ -1386,38 +1483,6 @@ const finalizeOrder = async (method) => {
        <aside className="panel order-panel yellow-panel">
   <h2><ReceiptIcon /> طلبك</h2>
 
-  {/* Phone lookup card */}
-  <div className="phone-lookup-card">
-    <div className="phone-lookup-row">
-      <input
-        className="phone-lookup-input"
-        placeholder="أدخل رقم الجوال لعرض الطلبات السابقة"
-        value={lookupPhone}
-        onChange={(e) => {
-          setLookupPhone(e.target.value);
-          setPreviousOrders([]);
-          setPreviousOrdersError("");
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") fetchPreviousOrdersByPhone(lookupPhone);
-        }}
-        inputMode="tel"
-      />
-      <button
-        className="phone-lookup-btn"
-        onClick={() => fetchPreviousOrdersByPhone(lookupPhone)}
-        disabled={isLoadingPreviousOrders || !lookupPhone.trim()}
-        title="عرض الطلبات السابقة"
-      >
-        {isLoadingPreviousOrders ? <LoaderIcon /> : "عرض"}
-      </button>
-    </div>
-
-    <div className="phone-lookup-meta">
-      {previousOrdersError && <div className="phone-lookup-hint">{previousOrdersError}</div>}
-    </div>
-  </div>
-
   <div className="order-split">
     <div className="order-col current-order-col">
       {order.length === 0 ? (
@@ -1429,7 +1494,12 @@ const finalizeOrder = async (method) => {
               <div key={i.lineId || idx} className="order-item">
                 <div className="order-item-main">
                   <div className="order-item-title">
-                    <span>{i.name} — {i.price} شيكل</span>
+                    <span>
+                      {i.name}
+                      {(i.quantity ?? 1) > 1 ? ` × ${i.quantity}` : ""}
+                      {" — "}
+                      {(i.price || 0) * (i.quantity ?? 1)} شيكل
+                    </span>
                   </div>
                   {i.lineId && itemNotes[i.lineId] && (
                     <div className="order-item-note">
@@ -1532,12 +1602,10 @@ const finalizeOrder = async (method) => {
         <strong>آخر الطلبات</strong>
         <span className="previous-orders-sub">حسب رقم الجوال</span>
       </div>
-
-      {!lookupPhone.trim() ? (
-        <div className="previous-orders-empty">
-          أدخل رقم الجوال بالأعلى لعرض آخر الطلبات.
-        </div>
-      ) : isLoadingPreviousOrders ? (
+      {previousOrdersError && (
+        <div className="previous-orders-error">{previousOrdersError}</div>
+      )}
+      {isLoadingPreviousOrders ? (
         <div className="previous-orders-loading">
           <LoaderIcon /> جاري جلب الطلبات...
         </div>
