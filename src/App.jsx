@@ -4,13 +4,6 @@ import { startVoiceCapture, stopVoiceCapture } from "./voice/useVoiceInput";
 import logo from "./assets/trio.png";
 
 // Icons as SVG components
-const ClipboardIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
-    <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
-  </svg>
-);
-
 const PlusIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -199,21 +192,6 @@ const ReceiptIcon = () => (
   </svg>
 );
 
-const XIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="18" y1="6" x2="6" y2="18"></line>
-    <line x1="6" y1="6" x2="18" y2="18"></line>
-  </svg>
-);
-
-const CreditCardIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect>
-    <line x1="1" y1="10" x2="23" y2="10"></line>
-  </svg>
-);
-
-
 /* =======================
    STATIC MENU (INITIAL)
 ======================= */
@@ -364,7 +342,6 @@ const openModal = () => {
 
 const [customerName, setCustomerName] = useState("");
 const [customerPhone, setCustomerPhone] = useState("");
-const [isPaying, setIsPaying] = useState(false);
 // Use environment variable for production, fallback to localhost for development
 const BACKEND_API = process.env.REACT_APP_BACKEND_API || "http://localhost:4242";
 
@@ -381,12 +358,12 @@ console.log("🔧 REACT_APP_BACKEND_API:", process.env.REACT_APP_BACKEND_API);
   const [webhookItems, setWebhookItems] = useState([]);
   const [isLoadingWebhook, setIsLoadingWebhook] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState(null); // "cash" | "card"
+  const [, setPaymentMethod] = useState(null); // "cash" | "card"
 const [orderType, setOrderType] = useState(null); // "delivery" | "pickup"
 const [address, setAddress] = useState("");
 const [notes, setNotes] = useState("");
 const [modalStep, setModalStep] = useState(null);
-const [hasPlayedWelcome, setHasPlayedWelcome] = useState(false);
+const [, setHasPlayedWelcome] = useState(false);
 const [itemNotes, setItemNotes] = useState({}); // { [lineId]: "note text" }
 const [noteTargetLineId, setNoteTargetLineId] = useState(null);
 const [isNoteListening, setIsNoteListening] = useState(false);
@@ -447,24 +424,6 @@ const [previousOrdersError, setPreviousOrdersError] = useState("");
     window.speechSynthesis.speak(utterance);
   };
 
-  const speakAndWait = (text) => {
-    if (!("speechSynthesis" in window) || !text) return Promise.resolve();
-    return new Promise((resolve) => {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = "ar-SA";
-      utterance.rate = 0.95;
-
-      const voices = window.speechSynthesis.getVoices();
-      const ar = voices.find((v) => v.lang.startsWith("ar"));
-      if (ar) utterance.voice = ar;
-
-      utterance.onend = resolve;
-      utterance.onerror = resolve;
-      window.speechSynthesis.speak(utterance);
-    });
-  };
-
   const botReply = (text, speakIt = true) => {
     setMessages((m) => [...m, { id: Date.now(), sender: "bot", text }]);
     if (speakIt) speak(text);
@@ -506,138 +465,6 @@ const [previousOrdersError, setPreviousOrdersError] = useState("");
     
     botReply(`هذه قائمة ${arabicCategory}`, false); // Don't speak, audio will play
   };
-
-  /* =======================
-     CHAT
-  ======================= */
-  const messagesRef = useRef(messages);
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
-
-  const callChatbot = async (userText) => {
-    setMessages((m) => [...m, { id: Date.now(), sender: "user", text: userText }]);
-
-    // Detect category from user text
-    const detectedCategory = detectCategoryFromText(userText);
-
-    try {
-      const r = await fetch(N8N_CHAT_WEBHOOK, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_message: userText,
-          conversation: messagesRef.current,
-          session_id: sessionId,
-        }),
-      });
-
-      const raw = await r.json();
-
-      // 🔥 unwrap array if exists
-      const data = Array.isArray(raw) ? raw[0] : raw;
-      const output = data?.output || data;
-
-      console.log("CHAT DATA:", output);
-
-      if (output?.response) botReply(output.response, true);
-
-      if (output?.items) {
-        const normalized = normalizeN8nItems(output.items, detectedCategory);
-        const categoryToUse = detectedCategory || 
-          (normalized[0]?.category_name ? CATEGORY_MAP[normalized[0].category_name] : null);
-        updateDynamicMenu(normalized, categoryToUse);
-      }
-    } catch {
-      botReply("تعذر الاتصال بالخدمة، حاول مرة أخرى.");
-    }
-  };
-const handleCashPayment = () => {
-  setModalStep("method");
-
-  if (orderType === "delivery") {
-    setModalStep("delivery"); // next modal asks for address & notes
-  } else if (orderType === "pickup") {
-    setModalStep("notes"); // ask only for notes
-  }
-};
-const handleCardPayment = async () => {
-  if (!customerName || !customerPhone) {
-    alert("الرجاء إدخال الاسم والهاتف");
-    return;
-  }
-
-  setIsPaying(true);
-
-  try {
-    const res = await fetch(`${BACKEND_API}/create-checkout-session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        customer_name: customerName,
-        customer_number: customerPhone,
-        total_price: total,
-        order_items: order,
-        session_id: sessionId,
-      }),
-    });
-
-    const data = await res.json();
-
-    if (!data.checkout_url) throw new Error("No checkout URL received");
-
-    window.location.href = data.checkout_url; // Redirect to Stripe
-  } catch (err) {
-    console.error(err);
-    alert("فشل بدء عملية الدفع بالبطاقة");
-    setIsPaying(false);
-  }
-};
-
-const finalizeCashOrder = async () => {
-  // Prepare payload
-  const payload = {
-    customer_name: customerName,
-    customer_number: customerPhone,
-    order_items: order,
-    total_price: total,
-    session_id: sessionId,
-    order_type: orderType,
-    address,
-    notes,
-  };
-
-  try {
-    console.log("💰 Sending cash order to:", `${BACKEND_API}/cash-order`);
-    console.log("💰 Payload:", payload);
-    
-    const res = await fetch(`${BACKEND_API}/cash-order`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      console.error("❌ Verify payment failed:", res.status, errorData);
-      throw new Error(`HTTP ${res.status}: ${errorData.message || "فشل التحقق من الدفع"}`);
-    }
-
-    const data = await res.json();
-    console.log("✅ Verify payment response:", data);
-    
-    if (data.success) {
-      botReply("✅ تم تقديم طلبك بنجاح!");
-      setModalStep(null);
-      setOrder([]);
-    } else {
-      botReply("❌ حدث خطأ في طلبك، الرجاء المحاولة مرة أخرى.");
-    }
-  } catch (err) {
-    console.error("❌ Error in finalizeCashOrder:", err);
-    botReply(`❌ لم يتم إتمام طلبك: ${err.message || "حدث خطأ غير متوقع"}. حاول مرة أخرى.`);
-  }
-};
 
   /* =======================
      VOICE
@@ -1239,12 +1066,6 @@ const renderCustomerModal = () => (
     </div>
   </>
 );
-
-const goBack = () => {
-  if (modalStep === "method") setModalStep("customer");
-  else if (modalStep === "delivery" || modalStep === "notes") setModalStep("method");
-};
-
 
 const renderMethodModal = () => (
   <>
