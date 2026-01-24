@@ -195,122 +195,127 @@ async function processOrder(session) {
   return { success: true, results };
 }
 
-// ======== VERIFY PAYMENT (with fallback processing) ========
-app.post("/verify-payment", async (req, res) => {
-  console.log("🔍 Verify payment called with session_id:", req.body?.session_id);
+// // ======== VERIFY PAYMENT (with fallback processing) ========
+// app.post("/verify-payment", async (req, res) => {
+//   console.log("🔍 Verify payment called with session_id:", req.body?.session_id);
   
-  try {
-    const { session_id } = req.body;
-    if (!session_id) {
-      console.error("❌ Missing session_id in request");
-      return res.status(400).json({ error: "Missing session_id" });
-    }
+//   try {
+//     const { session_id } = req.body;
+//     if (!session_id) {
+//       console.error("❌ Missing session_id in request");
+//       return res.status(400).json({ error: "Missing session_id" });
+//     }
 
-    console.log("🔍 Retrieving Stripe session:", session_id);
-    const session = await stripe.checkout.sessions.retrieve(session_id);
+//     console.log("🔍 Retrieving Stripe session:", session_id);
+//     const session = await stripe.checkout.sessions.retrieve(session_id);
 
-    console.log("🔍 Session status:", {
-      payment_status: session.payment_status,
-      processed: session.metadata?.processed,
-      has_metadata: !!session.metadata
-    });
+//     console.log("🔍 Session status:", {
+//       payment_status: session.payment_status,
+//       processed: session.metadata?.processed,
+//       has_metadata: !!session.metadata
+//     });
 
-    if (session.payment_status !== "paid") {
-      console.warn("⚠️ Payment not completed, status:", session.payment_status);
-      return res.status(400).json({ error: "Payment not completed", status: session.payment_status });
-    }
+//     if (session.payment_status !== "paid") {
+//       console.warn("⚠️ Payment not completed, status:", session.payment_status);
+//       return res.status(400).json({ error: "Payment not completed", status: session.payment_status });
+//     }
 
-    const processed = session.metadata?.processed;
-    console.log("🔍 Current processed status:", processed);
+//     const processed = session.metadata?.processed;
+//     console.log("🔍 Current processed status:", processed);
 
-    // ✅ ALWAYS PROCESS: If not successfully processed yet, process it here
-    // This ensures DB save ALWAYS happens after payment
-    // We check only for "true" - if it's "processing" or "error", we'll retry
-    if (processed !== "true") {
-      console.log("⚠️ Order not processed yet (status: " + processed + "), processing now via verify-payment");
+//     // ✅ ALWAYS PROCESS: If not successfully processed yet, process it here
+//     // This ensures DB save ALWAYS happens after payment
+//     // We check only for "true" - if it's "processing" or "error", we'll retry
+//     if (processed !== "true") {
+//       console.log("⚠️ Order not processed yet (status: " + processed + "), processing now via verify-payment");
       
-      try {
-        // Mark as processing to prevent duplicate processing
-        await stripe.checkout.sessions.update(session_id, {
-          metadata: { ...session.metadata, processed: "processing" },
-        }).catch(err => console.warn("Warning: Could not update metadata:", err.message));
+//       try {
+//         // Mark as processing to prevent duplicate processing
+//         await stripe.checkout.sessions.update(session_id, {
+//           metadata: { ...session.metadata, processed: "processing" },
+//         }).catch(err => console.warn("Warning: Could not update metadata:", err.message));
 
-        // Process the order (save to DB)
-        console.log("🚀 Starting order processing...");
-        const processResult = await processOrder(session);
+//         // Process the order (save to DB)
+//         console.log("🚀 Starting order processing...");
+//         const processResult = await processOrder(session);
 
-        // Mark as processed
-        await stripe.checkout.sessions.update(session_id, {
-          metadata: { ...session.metadata, processed: "true" },
-        }).catch(err => console.warn("Warning: Could not update metadata to processed:", err.message));
+//         // Mark as processed
+//         await stripe.checkout.sessions.update(session_id, {
+//           metadata: { ...session.metadata, processed: "true" },
+//         }).catch(err => console.warn("Warning: Could not update metadata to processed:", err.message));
 
-        console.log("✅ Order processed successfully via verify-payment:", session_id);
-        console.log("✅ Process result:", processResult);
+//         console.log("✅ Order processed successfully via verify-payment:", session_id);
+//         console.log("✅ Process result:", processResult);
         
-        return res.json({
-          success: true,
-          paid: true,
-          processed: "true",
-          message: "Payment verified and order processed successfully",
-          processed_via: "verify-payment",
-          results: processResult.results,
-        });
-      } catch (processErr) {
-        console.error("❌ Processing error:", processErr);
-        console.error("❌ Full error stack:", processErr.stack);
+//         return res.json({
+//           success: true,
+//           paid: true,
+//           processed: "true",
+//           message: "Payment verified and order processed successfully",
+//           processed_via: "verify-payment",
+//           results: processResult.results,
+//         });
+//       } catch (processErr) {
+//         console.error("❌ Processing error:", processErr);
+//         console.error("❌ Full error stack:", processErr.stack);
         
-        // Mark error with detailed message but don't fail the response
-        try {
-          await stripe.checkout.sessions.update(session_id, {
-            metadata: { 
-              ...session.metadata, 
-              processed: "error",
-              error_message: String(processErr.message || "Unknown error").substring(0, 100)
-            },
-          });
-        } catch (updateErr) {
-          console.error("❌ Failed to update session metadata:", updateErr);
-        }
+//         // Mark error with detailed message but don't fail the response
+//         try {
+//           await stripe.checkout.sessions.update(session_id, {
+//             metadata: { 
+//               ...session.metadata, 
+//               processed: "error",
+//               error_message: String(processErr.message || "Unknown error").substring(0, 100)
+//             },
+//           });
+//         } catch (updateErr) {
+//           console.error("❌ Failed to update session metadata:", updateErr);
+//         }
         
-        // Still return success but with error details
-        return res.status(500).json({
-          success: false,
-          paid: true,
-          error: "Payment verified but order processing failed",
-          details: processErr.message,
-          processed: "error",
-        });
-      }
-    }
+//         // Still return success but with error details
+//         return res.status(500).json({
+//           success: false,
+//           paid: true,
+//           error: "Payment verified but order processing failed",
+//           details: processErr.message,
+//           processed: "error",
+//         });
+//       }
+//     }
 
-    // Already successfully processed
-    console.log("✅ Order already processed successfully");
-    return res.json({
-      success: true,
-      paid: true,
-      processed: "true",
-      message: "Payment verified and order already processed",
-    });
-  } catch (err) {
-    console.error("Verify payment error:", err);
-    res.status(500).json({ error: "Verification failed", details: err.message });
-  }
-});
+//     // Already successfully processed
+//     console.log("✅ Order already processed successfully");
+//     return res.json({
+//       success: true,
+//       paid: true,
+//       processed: "true",
+//       message: "Payment verified and order already processed",
+//     });
+//   } catch (err) {
+//     console.error("Verify payment error:", err);
+//     res.status(500).json({ error: "Verification failed", details: err.message });
+//   }
+// });
 
 // ======== STRIPE WEBHOOK (THE ONLY PROCESSOR) ========
 app.post("/stripe-webhook", async (req, res) => {
   console.log("🔥 STRIPE WEBHOOK HIT");
 
   const sig = req.headers["stripe-signature"];
-
   let event;
+
   try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
   } catch (err) {
-    console.error("Webhook signature error:", err.message);
+    console.error("❌ Webhook signature error:", err.message);
     return res.status(400).send("Webhook Error");
   }
 
+  // نسمع فقط لحدث الدفع المكتمل
   if (event.type !== "checkout.session.completed") {
     return res.json({ received: true });
   }
@@ -318,58 +323,41 @@ app.post("/stripe-webhook", async (req, res) => {
   const session = event.data.object;
 
   try {
-    // Re-fetch session to read latest metadata
-    const full = await stripe.checkout.sessions.retrieve(session.id);
-
-    // ✅ hard idempotency
-    if (full.metadata?.processed === "true") {
-      console.log("✅ Webhook: already processed, skipping", full.id);
-      return res.json({ received: true, skipped: true });
+    // 🔒 تأكيد الدفع
+    if (session.payment_status !== "paid") {
+      console.log("⚠️ Payment not paid yet");
+      return res.json({ received: true });
     }
 
-    // Skip if already processing (avoid race condition with verify-payment fallback)
-    if (full.metadata?.processed === "processing") {
-      console.log("⚠️ Webhook: order is being processed elsewhere, skipping", full.id);
-      return res.json({ received: true, skipped: true, reason: "already_processing" });
+    console.log("💰 Payment successful for session:", session.id);
+
+    // 🔑 تأكد أن metadata موجودة
+    if (!session.metadata?.order) {
+      throw new Error("Missing order metadata");
     }
 
-    // Mark processing ASAP
-    await stripe.checkout.sessions.update(full.id, {
-      metadata: { ...full.metadata, processed: "processing" },
+    const orderItems = JSON.parse(session.metadata.order);
+
+    const totalPrice = (session.amount_total || 0) / 100;
+
+    // 💾 الحفظ الإجباري
+    await saveOrderToDB({
+      customerName: session.metadata.customer_name,
+      customerNumber: session.metadata.customer_number,
+      orderItems,
+      orderType: session.metadata.order_type,
+      paymentMethod: "card",
+      notes: "",
+      address: "",
+      totalPrice,
     });
 
-    console.log("🔥 Webhook: Starting order processing for session:", full.id);
+    console.log("✅ ORDER SAVED TO DB SUCCESSFULLY");
 
-    // ✅ DO WORK ONCE HERE using shared function
-    await processOrder(full);
-
-    // Mark processed
-    await stripe.checkout.sessions.update(full.id, {
-      metadata: { ...full.metadata, processed: "true" },
-    });
-
-    console.log("✅ Webhook processed order successfully:", full.id);
-    return res.json({ received: true, processed: true });
+    return res.json({ received: true, saved: true });
   } catch (err) {
-    console.error("❌ Webhook processing error:", err);
-    console.error("❌ Error details:", {
-      message: err.message,
-      stack: err.stack,
-      sessionId: session.id,
-    });
-
-    // Mark error so you can reprocess manually later if needed
-    try {
-      const full = await stripe.checkout.sessions.retrieve(session.id);
-      await stripe.checkout.sessions.update(full.id, {
-        metadata: { ...full.metadata, processed: "error", error_message: err.message },
-      });
-    } catch (e) {
-      console.error("Failed to mark webhook error:", e);
-    }
-
-    // Always ACK Stripe (return 200 to prevent retries if it's a permanent error)
-    return res.json({ received: true, processed: false, error: true, error_message: err.message });
+    console.error("❌ Failed to save order:", err);
+    return res.status(500).json({ received: true, error: err.message });
   }
 });
 

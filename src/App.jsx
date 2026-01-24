@@ -301,44 +301,37 @@ const normalizeN8nItems = (rawItems, detectedCategory = null) => {
   }));
 };
 /* 🔴 normalize n8n order — support quantity; merge duplicates into one line */
-const normalizeN8nOrder = (rawOrder) => {
+const normalizeN8nOrder = (rawOrder, menuState) => {
   if (!rawOrder) return [];
 
   const list = Array.isArray(rawOrder)
     ? rawOrder
     : Object.values(rawOrder);
 
-  const withQty = list.map((item) => ({
-    id: item.id ?? null,
-    name: item.title || item.name || "عنصر",
-    price: Number(item.price || 0),
-    quantity: Math.max(1, Number(item.quantity || item.qty || 1)),
-  }));
+  return list.map((item, index) => {
+    // 🔍 ابحث عن السعر الحقيقي من المينيو
+    const allMenuItems = Object.values(menuState).flat();
+   const normalize = (s = "") =>
+  s.replace(/\s+/g, "").toLowerCase();
 
-  const merged = [];
-  for (const it of withQty) {
-    const key = `${it.id ?? ""}|${it.name}|${it.price}`;
-    const idx = merged.findIndex(
-      (m) => `${m.id ?? ""}|${m.name}|${m.price}` === key
-    );
-    if (idx >= 0) {
-      const prev = merged[idx];
-      merged[idx] = { ...prev, quantity: prev.quantity + it.quantity };
-    } else merged.push({ ...it });
-  }
+const matched = allMenuItems.find(
+  (m) =>
+    normalize(m.name) ===
+    normalize(item.title || item.name)
+);
 
-  return merged.map((item, index) => {
-    const lineId = `${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`;
+
     return {
-      id: item.id ?? Date.now() + index,
-      lineId,
-      name: item.name,
-      price: item.price,
-      quantity: item.quantity,
+      id: matched?.id ?? Date.now() + index,
+      lineId: `${Date.now()}-${index}-${Math.random()}`,
+      name: matched?.name || item.title || item.name,
+      price: matched?.price ?? 0, // 👈 السعر من المينيو فقط
+      quantity: Math.max(1, Number(item.quantity || item.qty || 1)),
       image_url: null,
     };
   });
 };
+
 
 let audioContext = null;
 
@@ -828,7 +821,7 @@ const voiceOrder =
 if (voiceOrder && voiceOrder.length > 0) {
   console.log("🛒 Found order from voice:", voiceOrder);
 
-  const normalizedOrder = normalizeN8nOrder(voiceOrder);
+const normalizedOrder = normalizeN8nOrder(voiceOrder, menuState);
   
   setOrder((prev) => [...prev, ...normalizedOrder]);
 
@@ -1244,8 +1237,9 @@ const finalizeOrder = async (method) => {
   try {
     // 💵 CASH — DIRECT SAVE
     if (method === "cash") {
-      console.log("💰 Sending cash order to:", `${BACKEND_API}/cash-order`);
-      console.log("💰 Payload:", payload);
+      console.log("💰 CASH PAYMENT - Saving order");
+      console.log("💰 URL:", `${BACKEND_API}/cash-order`);
+      console.log("💰 Payload:", JSON.stringify(payload, null, 2));
       
       const res = await fetch(`${BACKEND_API}/cash-order`, {
         method: "POST",
@@ -1253,24 +1247,38 @@ const finalizeOrder = async (method) => {
         body: JSON.stringify(payload),
       });
 
+      console.log("💰 Response status:", res.status);
+      const responseText = await res.text();
+      console.log("💰 Response body:", responseText);
+
       if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        console.error("❌ Cash order failed:", res.status, errorData);
-        throw new Error(`HTTP ${res.status}: ${errorData.message || "فشل إرسال الطلب"}`);
+        console.error("❌ Cash order failed:", res.status, responseText);
+        throw new Error(`HTTP ${res.status}: ${responseText || "فشل إرسال الطلب"}`);
       }
 
-      const data = await res.json().catch(() => ({}));
+      let data = {};
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        data = responseText;
+      }
+      
       console.log("✅ Cash order success:", data);
 
-      alert("✅ تم تقديم الطلب. الدفع نقداً عند التوصيل.");
+      alert("✅ تم تقديم الطلبك بنجاح!\nرقم الجلسة: " + sessionId + "\nسيتم توصيل طلبك قريباً");
+      setModalStep(null);
       resetOrder();
       return;
     }
 
-    // 💳 CARD — STRIPE ONLY
-    console.log("💳 Sending create-checkout-session to:", `${BACKEND_API}/create-checkout-session`);
-    console.log("💳 Payload:", payload);
+    // 💳 CARD — STRIPE ONLY (DO NOT SAVE - ONLY CREATE SESSION)
+    console.log("💳 CARD PAYMENT - Creating Stripe session only (NO save)");
+    console.log("💳 URL:", `${BACKEND_API}/create-checkout-session`);
+    console.log("💳 Payload:", JSON.stringify(payload, null, 2));
     
+    // ⚠️ IMPORTANT: Do NOT save order here!
+    // Backend /create-checkout-session should ONLY create Stripe session
+    // Webhook will save the order after successful payment
     const res = await fetch(`${BACKEND_API}/create-checkout-session`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1284,12 +1292,14 @@ const finalizeOrder = async (method) => {
     }
 
     const data = await res.json();
-    console.log("✅ Checkout session response:", data);
+    console.log("✅ Checkout session created:", data);
     
     if (!data.checkout_url) {
       throw new Error("لم يتم استلام رابط الدفع من الخادم");
     }
 
+    console.log("💳 Redirecting to Stripe checkout...");
+    // Webhook will save after payment success
     window.location.href = data.checkout_url;
 
   } catch (err) {
