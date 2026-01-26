@@ -308,28 +308,40 @@ const normalizeN8nOrder = (rawOrder, menuState) => {
     ? rawOrder
     : Object.values(rawOrder);
 
-  return list.map((item, index) => {
-    // 🔍 ابحث عن السعر الحقيقي من المينيو
-    const allMenuItems = Object.values(menuState).flat();
-   const normalize = (s = "") =>
-  s.replace(/\s+/g, "").toLowerCase();
+  const allMenuItems = Object.values(menuState).flat();
 
-const matched = allMenuItems.find(
-  (m) =>
-    normalize(m.name) ===
-    normalize(item.title || item.name)
-);
+  const normalize = (s = "") =>
+    s
+      .replace(/\s+/g, "")
+      .replace(/[ةه]/g, "ه")
+      .replace(/[يى]/g, "ي")
+      .replace("طحينه", "طحينية")
+      .replace("طحينيه", "طحينية")
+      .replace("متومه", "متومة")
+      .replace("مثومة", "متومة")
+      .replace("ثومة", "متومة")
+      .replace("تومة", "متومة")
+      .toLowerCase();
 
+  return list
+    .map((item, index) => {
+      const matched = allMenuItems.find(
+        (m) => normalize(m.name) === normalize(item.title || item.name)
+      );
 
-    return {
-      id: matched?.id ?? Date.now() + index,
-      lineId: `${Date.now()}-${index}-${Math.random()}`,
-      name: matched?.name || item.title || item.name,
-      price: matched?.price ?? 0, // 👈 السعر من المينيو فقط
-      quantity: Math.max(1, Number(item.quantity || item.qty || 1)),
-      image_url: null,
-    };
-  });
+      // ❌ إذا ما في match → نرجّع null
+      if (!matched) return null;
+
+      return {
+        id: matched.id,
+        lineId: `${Date.now()}-${index}-${Math.random()}`,
+        name: matched.name,
+        price: matched.price,
+        quantity: Math.max(1, Number(item.quantity || 1)),
+        image_url: null,
+      };
+    })
+    .filter(Boolean); // 🔥 نحذف أي صنف غير موجود
 };
 
 
@@ -364,6 +376,8 @@ console.log("🔧 REACT_APP_BACKEND_API:", process.env.REACT_APP_BACKEND_API);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [, setPaymentMethod] = useState(null); // "cash" | "card"
 const [orderType, setOrderType] = useState(null); // "delivery" | "pickup"
+const [isCardPaymentInProgress, setIsCardPaymentInProgress] = useState(false);
+
 const [address, setAddress] = useState("");
 const [notes, setNotes] = useState("");
 const [modalStep, setModalStep] = useState(null);
@@ -395,6 +409,19 @@ const [showPhoneModal, setShowPhoneModal] = useState(true);
     
     // Don't play welcome audio automatically - wait for user to click "ابدأ المحادثة"
     // The audio will play when user clicks the start button
+  }, []);
+
+  /* =======================
+     FIX 4: Clear order after Stripe success
+  ======================= */
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get("from_payment") === "true") {
+      console.log("✅ Payment success detected - clearing order");
+      resetOrder();
+      // Remove query param from URL
+      window.history.replaceState({}, "", window.location.pathname);
+    }
   }, []);
 
 
@@ -787,6 +814,20 @@ const fetchPreviousOrdersByPhone = async (phone) => {
       // 🔥 Handle ORDER from voice
 const voiceOrder =
   data?.order || data?.output?.order || data?.response?.order;
+  // 🚨 حالة: المستخدم طلب صنف غير موجود نهائيًا
+if (voiceOrder && voiceOrder.length > 0) {
+  const normalizedOrder = normalizeN8nOrder(voiceOrder, menuState);
+
+  if (normalizedOrder.length === 0) {
+    stopAllAudio();
+    playAudioFromUrl(
+      "https://puwpdltpzxlbqphnhswz.supabase.co/storage/v1/object/public/Trio_voices/unavailable.mp3"
+    );
+    setIsLoadingWebhook(false);
+    return;
+  }
+}
+
 
       // Check if we have items but no order - this means showing menu items
       const hasItems = items && items.length > 0;
@@ -819,28 +860,33 @@ const voiceOrder =
       // If hasOrder, don't play menu/welcome audio while adding to order
 
 if (voiceOrder && voiceOrder.length > 0) {
-  console.log("🛒 Found order from voice:", voiceOrder);
+  // 🔒 FIX 3: Block adding items during card payment
+  if (isCardPaymentInProgress) {
+    console.log("🚫 Order ignored — card payment in progress");
+    setIsLoadingWebhook(false);
+    return;
+  }
 
-const normalizedOrder = normalizeN8nOrder(voiceOrder, menuState);
-  
+  const normalizedOrder = normalizeN8nOrder(voiceOrder, menuState);
+
+  // 🚨 ولا صنف تطابق
+  if (normalizedOrder.length === 0) {
+    stopAllAudio();
+    playAudioFromUrl(
+      "https://puwpdltpzxlbqphnhswz.supabase.co/storage/v1/object/public/Trio_voices/unavailable.mp3"
+    );
+    setIsLoadingWebhook(false);
+    return;
+  }
+
   setOrder((prev) => [...prev, ...normalizedOrder]);
 
-  // Play ONLY "تم إضافة الصنف" audio (no auto prompt for notes)
-  const playAddConfirmation = async () => {
-    stopAllAudio();
-    try {
-      const addedAudio = new Audio("https://puwpdltpzxlbqphnhswz.supabase.co/storage/v1/object/public/Trio_voices/added.mp3");
-      addedAudio.crossOrigin = "anonymous";
-      await addedAudio.play();
-    } catch (err) {
-      console.error("Error playing added audio:", err);
-    }
-  };
-
   setTimeout(() => {
-    playAddConfirmation();
+    playAudioFromUrl(
+      "https://puwpdltpzxlbqphnhswz.supabase.co/storage/v1/object/public/Trio_voices/added.mp3"
+    );
   }, 300);
-  }
+}
 
       if (items && items.length > 0) {
         console.log("📦 Found items:", items);
@@ -1003,6 +1049,12 @@ startVoiceCapture((text) => {
      ORDER
   ======================= */
  const addToOrder = (item, quantity = 1) => {
+  // 🔒 FIX 3: Block adding items during card payment
+  if (isCardPaymentInProgress) {
+    console.log("🚫 Cannot add item — card payment in progress");
+    return;
+  }
+
   const qty = Math.max(1, Number(quantity));
   setOrder((o) => {
     const key = (i) => `${i.id ?? ""}|${i.name}|${i.price}`;
@@ -1192,6 +1244,7 @@ const resetOrder = () => {
   setPaymentMethod(null);
   setOrderType(null);
   setModalStep(null);
+  setIsCardPaymentInProgress(false);
 };
 
 const finalizeOrder = async (method) => {
@@ -1299,8 +1352,9 @@ const finalizeOrder = async (method) => {
     }
 
     console.log("💳 Redirecting to Stripe checkout...");
-    // Webhook will save after payment success
-    window.location.href = data.checkout_url;
+   setIsCardPaymentInProgress(true); // 🔒 LOCK ORDER
+window.location.href = data.checkout_url;
+
 
   } catch (err) {
     console.error("❌ Error in handleSubmitOrder:", err);
@@ -1464,7 +1518,7 @@ const finalizeOrder = async (method) => {
                 <button
                   className={`voice-circle ${isListening ? "listening" : ""}`}
                   onClick={handleMicClick}
-                  disabled={isLoadingWebhook || isNoteListening}
+                  disabled={isLoadingWebhook || isNoteListening || isCardPaymentInProgress}
                 >
                   {isListening ? <StopIcon /> : <MicIcon />}
                 </button>
