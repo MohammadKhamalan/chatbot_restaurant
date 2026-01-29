@@ -6,8 +6,7 @@ import imgRoler from "./assets/roler.jpg";
 import imgBobkat from "./assets/bobkat.jpg";
 import imgBaldozer from "./assets/baldozer.jpg";
 import imgBashka from "./assets/bashka.jpg";
-import imgSalata from "./assets/salata.jpg";
-import imgkabi from "./assets/kabi.png"
+
 
 // Icons as SVG components
 const PlusIcon = () => (
@@ -39,13 +38,7 @@ const SpeakerIcon = () => (
   </svg>
 );
 
-const RefreshIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="23 4 23 10 17 10"></polyline>
-    <polyline points="1 20 1 14 7 14"></polyline>
-    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-  </svg>
-);
+
 
 const LoaderIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="spin">
