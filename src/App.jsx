@@ -2,6 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { startVoiceCapture, stopVoiceCapture } from "./voice/useVoiceInput";
 import logo from "./assets/trio.png";
+import imgRoler from "./assets/roler.jpg";
+import imgBobkat from "./assets/bobkat.jpg";
+import imgBaldozer from "./assets/baldozer.jpg";
+import imgBashka from "./assets/bashka.jpg";
+import imgSalata from "./assets/salata.jpg";
+import imgkabi from "./assets/kabi.png"
 
 // Icons as SVG components
 const PlusIcon = () => (
@@ -195,6 +201,15 @@ const ReceiptIcon = () => (
 /* =======================
    STATIC MENU (INITIAL)
 ======================= */
+const IMAGE_MAP = {
+  "رول دجاج": imgRoler,
+  "بوب كات": imgBobkat,
+  "بلدوزر": imgBaldozer,
+  "كرين باشكا": imgBashka,
+  
+
+};
+
 const INITIAL_MENU = {
   sandwiches: [
     { id: 4, name: "رول دجاج", price: 16, image_url: null },
@@ -296,7 +311,8 @@ const normalizeN8nItems = (rawItems, detectedCategory = null) => {
     id: index + 1000,
     name: item.title || item.name || "عنصر",
     price: Number(item.price || 0),
-    image_url: null,
+    image_url: item.image_url || item.image || null, // ✅
+
     category_name: categoryName,
   }));
 };
@@ -310,18 +326,25 @@ const normalizeN8nOrder = (rawOrder, menuState) => {
 
   const allMenuItems = Object.values(menuState).flat();
 
-  const normalize = (s = "") =>
-    s
-      .replace(/\s+/g, "")
-      .replace(/[ةه]/g, "ه")
-      .replace(/[يى]/g, "ي")
-      .replace("طحينه", "طحينية")
-      .replace("طحينيه", "طحينية")
-      .replace("متومه", "متومة")
-      .replace("مثومة", "متومة")
-      .replace("ثومة", "متومة")
-      .replace("تومة", "متومة")
-      .toLowerCase();
+ const normalize = (s = "") =>
+  s
+    .replace(/\s+/g, "")
+    .replace(/[ةه]/g, "ه")
+    .replace(/[يى]/g, "ي")
+    .replace("طحينه", "طحينية")
+    .replace("طحينيه", "طحينية")
+    .replace("متومه", "متومة")
+    .replace("مثومة", "متومة")
+    .replace("ثومة", "متومة")
+    .replace("تومة", "متومة")
+    .replace("كابي", "كابي")
+    .replace("كبي", "كابي")
+    .replace("قابي", "كابي")
+    .replace("كافي", "كابي")
+    .replace("قهوة", "كابي")
+    .replace("عصير", "كابي")
+    .toLowerCase();
+
 
   return list
     .map((item, index) => {
@@ -338,7 +361,7 @@ const normalizeN8nOrder = (rawOrder, menuState) => {
         name: matched.name,
         price: matched.price,
         quantity: Math.max(1, Number(item.quantity || 1)),
-        image_url: null,
+  image_url: matched.image_url || null, // ✅
       };
     })
     .filter(Boolean); // 🔥 نحذف أي صنف غير موجود
@@ -350,6 +373,10 @@ let audioContext = null;
 /* =======================
    APP
 ======================= */
+const getImageForItem = (item) => {
+  return item.image_url || IMAGE_MAP[item.name] || null;
+};
+
 function App() {
  
 const openModal = () => {
@@ -1457,9 +1484,19 @@ window.location.href = data.checkout_url;
 {currentCategory && webhookItems.length === 0 && (
   <div className="menu-items-grid">
     {menuState[currentCategory]?.map((item) => (
-      <div key={item.id} className="menu-item-card">
-        <h3>{item.name}</h3>
-        <p className="item-price">{item.price} شيكل</p>
+     <div className="menu-item-card">
+ {getImageForItem(item) && (
+  <img
+    src={getImageForItem(item)}
+    alt={item.name}
+    className="menu-item-image"
+    loading="lazy"
+  />
+)}
+
+  <h3>{item.name}</h3>
+  <p className="item-price">{item.price} شيكل</p>
+
         <button
           className="add-item-btn"
           onClick={() => addToOrder(item)}
@@ -1476,9 +1513,20 @@ window.location.href = data.checkout_url;
             <div className="searched-items-section">
               <div className="searched-items-grid">
                 {webhookItems.map((item) => (
-                  <div key={item.id} className="searched-item-card">
-                    <h3>{item.name}</h3>
-                    <p className="item-price">{item.price} شيكل</p>
+                  <div className="searched-item-card">
+  {getImageForItem(item) && (
+  <img
+    src={getImageForItem(item)}
+    alt={item.name}
+    className="menu-item-image"
+    loading="lazy"
+  />
+)}
+
+
+  <h3>{item.name}</h3>
+  <p className="item-price">{item.price} شيكل</p>
+
                     <button 
                       className="add-item-btn"
                       onClick={() => addToOrder(item)}
@@ -1531,14 +1579,7 @@ window.location.href = data.checkout_url;
                   </div>
                 )}
                 
-                {/* Refresh Menu Button */}
-                <button
-                  className="webhook-btn refresh-menu-btn"
-                  onClick={() => callWebhook()}
-                  disabled={isLoadingWebhook || !sessionId}
-                >
-                  {isLoadingWebhook ? <><LoaderIcon /> 🤔 يفكرر...</> : <><RefreshIcon /> تحديث القائمة</>}
-                </button>
+              
               </>
             )}
           </div>
