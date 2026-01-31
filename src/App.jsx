@@ -6,6 +6,10 @@ import imgRoler from "./assets/roler.jpg";
 import imgBobkat from "./assets/bobkat.jpg";
 import imgBaldozer from "./assets/baldozer.jpg";
 import imgBashka from "./assets/bashka.jpg";
+import imgKola from "./assets/kola.jpeg";
+import imgKabi from "./assets/kabi.jpeg";
+import imgTomeh from "./assets/tomeh.jpeg";
+import imgThenieh from "./assets/thenieh.jpeg";
 
 
 // Icons as SVG components
@@ -199,8 +203,10 @@ const IMAGE_MAP = {
   "بوب كات": imgBobkat,
   "بلدوزر": imgBaldozer,
   "كرين باشكا": imgBashka,
-  
-
+  "كولا": imgKola,
+  "كابي": imgKabi,
+  "متومة": imgTomeh,
+  "طحينة": imgThenieh,
 };
 
 const INITIAL_MENU = {
@@ -413,6 +419,7 @@ const [previousOrders, setPreviousOrders] = useState([]);
 const [isLoadingPreviousOrders, setIsLoadingPreviousOrders] = useState(false);
 const [previousOrdersError, setPreviousOrdersError] = useState("");
 const [showPhoneModal, setShowPhoneModal] = useState(true);
+const [showOrderSuccessModal, setShowOrderSuccessModal] = useState(false);
 // customer | method | delivery | notes
 
 
@@ -439,7 +446,7 @@ const [showPhoneModal, setShowPhoneModal] = useState(true);
     if (urlParams.get("from_payment") === "true") {
       console.log("✅ Payment success detected - clearing order");
       resetOrder();
-      // Remove query param from URL
+      // Remove query param from URL (card users see modal on PaymentSuccess page)
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, []);
@@ -1338,9 +1345,9 @@ const finalizeOrder = async (method) => {
       
       console.log("✅ Cash order success:", data);
 
-      alert("✅ تم تقديم الطلبك بنجاح!\nرقم الجلسة: " + sessionId + "\nسيتم توصيل طلبك قريباً");
       setModalStep(null);
       resetOrder();
+      setShowOrderSuccessModal(true);
       return;
     }
 
@@ -1465,6 +1472,9 @@ window.location.href = data.checkout_url;
       key={key}
       className={`category-btn ${currentCategory === key ? "active" : ""}`}
       onClick={() => {
+        if (key !== currentCategory) {
+          playAudioFromUrl("https://puwpdltpzxlbqphnhswz.supabase.co/storage/v1/object/public/Trio_voices/welcome.mp3");
+        }
         setCurrentCategory(key);
         setWebhookItems([]); // hide searched items
       }}
@@ -1771,6 +1781,24 @@ window.location.href = data.checkout_url;
       {modalStep === "method" && renderMethodModal()}
       {modalStep === "delivery" && renderDeliveryModal()}
       {modalStep === "notes" && renderNotesModal()}
+    </div>
+  </div>
+)}
+
+{showOrderSuccessModal && (
+  <div className="modal-overlay">
+    <div className="modal order-success-modal">
+      <div className="order-success-content">
+        <span className="order-success-icon">✅</span>
+        <h2>تم تسجيل طلبك</h2>
+        <p>سيتم توصيل طلبك قريباً</p>
+        <button
+          className="confirm"
+          onClick={() => setShowOrderSuccessModal(false)}
+        >
+          العودة للصفحة الرئيسية
+        </button>
+      </div>
     </div>
   </div>
 )}

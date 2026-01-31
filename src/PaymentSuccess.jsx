@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import "./App.css";
 
 const BACKEND_API = process.env.REACT_APP_BACKEND_API || "http://localhost:4242";
 
@@ -63,21 +64,7 @@ export default function PaymentSuccess() {
         const data = await response.json().catch(() => ({}));
         console.log("Payment verification response:", data);
 
-        // Check if order was actually processed
-        const wasProcessed = data.processed === "true" || data.processed_via === "verify-payment";
-        
         setStatus("success");
-        setMessage(
-          wasProcessed 
-            ? "✅ Payment verified. Your order has been processed and sent to the kitchen. Invoice will be sent to WhatsApp."
-            : "✅ Payment verified. Your order is being processed."
-        );
-
-        // Redirect after 3 seconds with flag to clear order
-        setTimeout(() => {
-          console.log("Redirecting to home page...");
-          navigate("/?from_payment=true", { replace: true });
-        }, 2000);
       } catch (err) {
         console.error("Payment verification error:", err);
         console.error("Error details:", {
@@ -89,18 +76,6 @@ export default function PaymentSuccess() {
         // Even if verification fails, payment was successful in Stripe
         // So we show a success message but note the verification issue
         setStatus("success");
-        setMessage(
-          "✅ Payment successful! Your order is being processed. " +
-          (err.message.includes("timeout") 
-            ? "Verification is taking longer than expected, but your payment was received."
-            : "If you don't receive a confirmation, please contact support.")
-        );
-        
-        // Still redirect, but give more time
-        setTimeout(() => {
-          console.log("Redirecting to home page after error...");
-          navigate("/?from_payment=true", { replace: true });
-        }, 3000);
       }
     };
 
@@ -112,76 +87,50 @@ export default function PaymentSuccess() {
   };
 
   return (
-    <div style={{ padding: 40, textAlign: "center", maxWidth: 600, margin: "0 auto" }}>
+    <div className="payment-success-page">
       {status === "processing" && (
-        <>
-          <h1>⏳ Processing...</h1>
-          <p>{message}</p>
-          <div style={{ marginTop: 20 }}>
-            <button 
-              onClick={handleManualRedirect}
-              style={{
-                padding: "10px 20px",
-                fontSize: "16px",
-                backgroundColor: "#007bff",
-                color: "white",
-                border: "none",
-                borderRadius: "5px",
-                cursor: "pointer"
-              }}
-            >
-              Go to Home Page
-            </button>
+        <div className="modal-overlay">
+          <div className="modal">
+            <div className="order-success-content">
+              <span className="order-success-icon">⏳</span>
+              <h2>جاري المعالجة...</h2>
+              <p>{message}</p>
+              <button className="confirm" onClick={handleManualRedirect}>
+                العودة للصفحة الرئيسية
+              </button>
+            </div>
           </div>
-        </>
+        </div>
       )}
 
       {status === "success" && (
-        <>
-          <h1>✅ Payment Successful</h1>
-          <p>{message}</p>
-          <p style={{ opacity: 0.7, marginTop: 20 }}>Redirecting automatically…</p>
-          <div style={{ marginTop: 20 }}>
-            <button 
-              onClick={handleManualRedirect}
-              style={{
-                padding: "10px 20px",
-                fontSize: "16px",
-                backgroundColor: "#28a745",
-                color: "white",
-                border: "none",
-                borderRadius: "5px",
-                cursor: "pointer"
-              }}
-            >
-              Go to Home Page Now
-            </button>
+        <div className="modal-overlay">
+          <div className="modal order-success-modal">
+            <div className="order-success-content">
+              <span className="order-success-icon">✅</span>
+              <h2>تم تسجيل طلبك</h2>
+              <p>سيتم توصيل طلبك قريباً</p>
+              <button className="confirm" onClick={handleManualRedirect}>
+                العودة للصفحة الرئيسية
+              </button>
+            </div>
           </div>
-        </>
+        </div>
       )}
 
       {status === "error" && (
-        <>
-          <h1>❌ Error</h1>
-          <p style={{ color: "crimson" }}>{message}</p>
-          <p style={{ opacity: 0.7, marginTop: 20 }}>Redirecting automatically…</p>
-          <div style={{ marginTop: 20 }}>
-            <button 
-              onClick={handleManualRedirect}
-              style={{
-                padding: "10px 20px",
-                fontSize: "16px",
-                backgroundColor: "#dc3545",
-                color: "white",
-                border: "none",
-                borderRadius: "5px",
-                cursor: "pointer"
-              }}
-            >
-              Go to Home Page
-            </button>
+        <div className="modal-overlay">
+          <div className="modal">
+            <div className="order-success-content">
+              <span className="order-success-icon">❌</span>
+              <h2>حدث خطأ</h2>
+              <p style={{ color: "crimson" }}>{message}</p>
+              <button className="confirm" onClick={handleManualRedirect}>
+                العودة للصفحة الرئيسية
+              </button>
+            </div>
           </div>
-        </>
+        </div>
       )}
     </div>
   );
